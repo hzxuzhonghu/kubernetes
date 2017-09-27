@@ -1,12 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -104,7 +101,7 @@ func TestLogEventsLegacy(t *testing.T) {
 		},
 	} {
 		var buf bytes.Buffer
-		backend := NewBackend(&buf, FormatLegacy, auditv1beta1.SchemeGroupVersion)
+		backend, _ := NewBackend(&buf, FormatLegacy, auditv1beta1.SchemeGroupVersion)
 		backend.ProcessEvents(test.event)
 		match, err := regexp.MatchString(test.expected, buf.String())
 		if err != nil {
@@ -157,7 +154,7 @@ func TestLogEventsJson(t *testing.T) {
 		},
 	} {
 		var buf bytes.Buffer
-		backend := NewBackend(&buf, FormatJson, auditv1beta1.SchemeGroupVersion)
+		backend, _ := NewBackend(&buf, FormatJson, auditv1beta1.SchemeGroupVersion)
 		backend.ProcessEvents(event)
 		// decode events back and compare with the original one.
 		result := &auditinternal.Event{}

@@ -32,6 +32,7 @@ import (
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	pluginbuffered "k8s.io/apiserver/plugin/pkg/audit/buffered"
 	pluginlog "k8s.io/apiserver/plugin/pkg/audit/log"
 	pluginwebhook "k8s.io/apiserver/plugin/pkg/audit/webhook"
 )
@@ -53,7 +54,8 @@ type AuditOptions struct {
 	PolicyFile string
 
 	// Plugin options
-
+	// Defaults to false.
+	EnableSyncMode bool
 	LogOptions     AuditLogOptions
 	WebhookOptions AuditWebhookOptions
 }
@@ -74,16 +76,10 @@ type AuditWebhookOptions struct {
 	ConfigFile string
 	// Should the webhook asynchronous batch events to the webhook backend or
 	// should the webhook block responses?
-	//
-	// Defaults to asynchronous batch events.
-	Mode string
 }
 
 func NewAuditOptions() *AuditOptions {
-	return &AuditOptions{
-		WebhookOptions: AuditWebhookOptions{Mode: pluginwebhook.ModeBatch},
-		LogOptions:     AuditLogOptions{Format: pluginlog.FormatJson},
-	}
+	return &AuditOptions{}
 }
 
 // Validate checks invalid config combination
@@ -102,18 +98,6 @@ func (o *AuditOptions) Validate() []error {
 			allErrors = append(allErrors, fmt.Errorf("feature '%s' must be enabled to set option --audit-webhook-config-file", features.AdvancedAuditing))
 		}
 	} else {
-		// check webhook mode
-		validMode := false
-		for _, m := range pluginwebhook.AllowedModes {
-			if m == o.WebhookOptions.Mode {
-				validMode = true
-				break
-			}
-		}
-		if !validMode {
-			allErrors = append(allErrors, fmt.Errorf("invalid audit webhook mode %s, allowed modes are %q", o.WebhookOptions.Mode, strings.Join(pluginwebhook.AllowedModes, ",")))
-		}
-
 		// check log format
 		validFormat := false
 		for _, f := range pluginlog.AllowedFormats {
@@ -149,6 +133,10 @@ func (o *AuditOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.PolicyFile, "audit-policy-file", o.PolicyFile,
 		"Path to the file that defines the audit policy configuration. Requires the 'AdvancedAuditing' feature gate."+
 			" With AdvancedAuditing, a profile is required to enable auditing.")
+	fs.BoolVar(&o.EnableSyncMode, "audit-sync", false,
+		"Strategy for processing audit events. false indicates events buffered to queue,"+
+			" and then are asynchronously processed by several goroutines. true indicates"+
+			" events are synchronously processed.")
 
 	o.LogOptions.AddFlags(fs)
 	o.WebhookOptions.AddFlags(fs)
@@ -171,10 +159,10 @@ func (o *AuditOptions) ApplyTo(c *server.Config) error {
 	}
 
 	// 2. Apply plugin options.
-	if err := o.LogOptions.advancedApplyTo(c); err != nil {
+	if err := o.LogOptions.advancedApplyTo(c, o.EnableSyncMode); err != nil {
 		return err
 	}
-	if err := o.WebhookOptions.applyTo(c); err != nil {
+	if err := o.WebhookOptions.applyTo(c, o.EnableSyncMode); err != nil {
 		return err
 	}
 
@@ -206,7 +194,7 @@ func (o *AuditLogOptions) AddFlags(fs *pflag.FlagSet) {
 		"The maximum number of old audit log files to retain.")
 	fs.IntVar(&o.MaxSize, "audit-log-maxsize", o.MaxSize,
 		"The maximum size in megabytes of the audit log file before it gets rotated.")
-	fs.StringVar(&o.Format, "audit-log-format", o.Format,
+	fs.StringVar(&o.Format, "audit-log-format", pluginlog.FormatJson,
 		"Format of saved audits. \"legacy\" indicates 1-line text format for each event."+
 			" \"json\" indicates structured json format. Requires the 'AdvancedAuditing' feature"+
 			" gate. Known formats are "+strings.Join(pluginlog.AllowedFormats, ",")+".")
@@ -229,9 +217,16 @@ func (o *AuditLogOptions) getWriter() io.Writer {
 	return w
 }
 
-func (o *AuditLogOptions) advancedApplyTo(c *server.Config) error {
+func (o *AuditLogOptions) advancedApplyTo(c *server.Config, isSync bool) error {
 	if w := o.getWriter(); w != nil {
-		c.AuditBackend = appendBackend(c.AuditBackend, pluginlog.NewBackend(w, o.Format, auditv1beta1.SchemeGroupVersion))
+		backend, err := pluginlog.NewBackend(w, o.Format, auditv1beta1.SchemeGroupVersion)
+		if err != nil {
+			return fmt.Errorf("initializing audit log: %v", err)
+		}
+		if isSync == false {
+			backend = pluginbuffered.NewBackend(backend)
+		}
+		c.AuditBackend = appendBackend(c.AuditBackend, backend)
 	}
 	return nil
 }
@@ -245,21 +240,23 @@ func (o *AuditWebhookOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.ConfigFile, "audit-webhook-config-file", o.ConfigFile,
 		"Path to a kubeconfig formatted file that defines the audit webhook configuration."+
 			" Requires the 'AdvancedAuditing' feature gate.")
-	fs.StringVar(&o.Mode, "audit-webhook-mode", o.Mode,
-		"Strategy for sending audit events. Blocking indicates sending events should block"+
-			" server responses. Batch causes the webhook to buffer and send events"+
-			" asynchronously. Known modes are "+strings.Join(pluginwebhook.AllowedModes, ",")+".")
 }
 
-func (o *AuditWebhookOptions) applyTo(c *server.Config) error {
+func (o *AuditWebhookOptions) applyTo(c *server.Config, isSync bool) error {
 	if o.ConfigFile == "" {
 		return nil
 	}
-
-	webhook, err := pluginwebhook.NewBackend(o.ConfigFile, o.Mode, auditv1beta1.SchemeGroupVersion)
+	sendWithRetry := false
+	if isSync == false {
+		sendWithRetry = true
+	}
+	backend, err := pluginwebhook.NewBackend(o.ConfigFile, auditv1beta1.SchemeGroupVersion, sendWithRetry)
 	if err != nil {
 		return fmt.Errorf("initializing audit webhook: %v", err)
 	}
-	c.AuditBackend = appendBackend(c.AuditBackend, webhook)
+	if isSync == false {
+		backend = pluginbuffered.NewBackend(backend)
+	}
+	c.AuditBackend = appendBackend(c.AuditBackend, backend)
 	return nil
 }

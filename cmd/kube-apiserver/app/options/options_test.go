@@ -52,9 +52,9 @@ func TestAddFlags(t *testing.T) {
 		"--audit-log-maxbackup=12",
 		"--audit-log-maxsize=13",
 		"--audit-log-path=/var/log",
+		"--audit-sync=false",
 		"--audit-policy-file=/policy",
 		"--audit-webhook-config-file=/webhook-config",
-		"--audit-webhook-mode=blocking",
 		"--authentication-token-webhook-cache-ttl=3m",
 		"--authentication-token-webhook-config-file=/token-webhook-config",
 		"--authorization-mode=AlwaysDeny",
@@ -167,7 +167,6 @@ func TestAddFlags(t *testing.T) {
 				Format:     "json",
 			},
 			WebhookOptions: apiserveroptions.AuditWebhookOptions{
-				Mode:       "blocking",
 				ConfigFile: "/webhook-config",
 			},
 			PolicyFile: "/policy",

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -34,60 +35,69 @@ const (
 	FormatJson = "json"
 )
 
+// The plugin name reported in error metrics.
+const pluginName = "log"
+
 // AllowedFormats are the formats known by log backend.
 var AllowedFormats = []string{
 	FormatLegacy,
 	FormatJson,
 }
 
-type backend struct {
+func NewBackend(out io.Writer, format string, groupVersion schema.GroupVersion) (audit.Backend, error) {
+	return newBlockingBackend(out, format, groupVersion), nil
+}
+
+type blockingBackend struct {
 	out          io.Writer
 	format       string
 	groupVersion schema.GroupVersion
+	mu           sync.Mutex
 }
 
-var _ audit.Backend = &backend{}
+var _ audit.Backend = &blockingBackend{}
 
-func NewBackend(out io.Writer, format string, groupVersion schema.GroupVersion) audit.Backend {
-	return &backend{
+func newBlockingBackend(out io.Writer, format string, groupVersion schema.GroupVersion) audit.Backend {
+	return &blockingBackend{
 		out:          out,
 		format:       format,
 		groupVersion: groupVersion,
+		mu:           sync.Mutex{},
 	}
 }
 
-func (b *backend) ProcessEvents(events ...*auditinternal.Event) {
+func (b *blockingBackend) ProcessEvents(events ...*auditinternal.Event) {
 	for _, ev := range events {
-		b.logEvent(ev)
-	}
-}
-
-func (b *backend) logEvent(ev *auditinternal.Event) {
-	line := ""
-	switch b.format {
-	case FormatLegacy:
-		line = audit.EventString(ev) + "\n"
-	case FormatJson:
-		bs, err := runtime.Encode(audit.Codecs.LegacyCodec(b.groupVersion), ev)
-		if err != nil {
-			audit.HandlePluginError("log", err, ev)
+		line := ""
+		switch b.format {
+		case FormatLegacy:
+			line = audit.EventString(ev) + "\n"
+		case FormatJson:
+			bs, err := runtime.Encode(audit.Codecs.LegacyCodec(b.groupVersion), ev)
+			if err != nil {
+				audit.HandlePluginError(pluginName, err, ev)
+				return
+			}
+			line = string(bs[:])
+		default:
+			audit.HandlePluginError(pluginName, fmt.Errorf("log format %q is not in list of known formats (%s)",
+				b.format, strings.Join(AllowedFormats, ",")), ev)
 			return
 		}
-		line = string(bs[:])
-	default:
-		audit.HandlePluginError("log", fmt.Errorf("log format %q is not in list of known formats (%s)",
-			b.format, strings.Join(AllowedFormats, ",")), ev)
-		return
-	}
-	if _, err := fmt.Fprint(b.out, line); err != nil {
-		audit.HandlePluginError("log", err, ev)
+
+		b.mu.Lock()
+		_, err := fmt.Fprint(b.out, line)
+		b.mu.Unlock()
+		if err != nil {
+			audit.HandlePluginError(pluginName, err, ev)
+		}
 	}
 }
 
-func (b *backend) Run(stopCh <-chan struct{}) error {
+func (b *blockingBackend) Run(stopCh <-chan struct{}) error {
 	return nil
 }
 
-func (b *backend) Shutdown() {
+func (b *blockingBackend) Shutdown() {
 	// Nothing to do here.
 }

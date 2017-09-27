@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package webhook
+package buffered
 
 import (
 	"net/http/httptest"
@@ -44,14 +44,14 @@ func TestBatchWebhookMaxEventsV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 
 	backend.ProcessEvents(events...)
 
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time, 1)
 
-	backend.sendBatchEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(stopCh, timer))
 	require.Equal(t, defaultBatchMaxSize, <-got, "did not get batch max size")
 
 	go func() {
@@ -59,7 +59,7 @@ func TestBatchWebhookMaxEventsV1Alpha1(t *testing.T) {
 		timer <- time.Now()         // Trigger the wait timeout
 	}()
 
-	backend.sendBatchEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(stopCh, timer))
 	require.Equal(t, nRest, <-got, "failed to get the rest of the events")
 }
 
@@ -76,7 +76,7 @@ func TestBatchWebhookStopChV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 	backend.ProcessEvents(events...)
 
 	stopCh := make(chan struct{})
@@ -86,7 +86,7 @@ func TestBatchWebhookStopChV1Alpha1(t *testing.T) {
 		waitForEmptyBuffer(backend)
 		close(stopCh) // stop channel has stopped
 	}()
-	backend.sendBatchEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(stopCh, timer))
 	require.Equal(t, expected, <-got, "get queued events after timer expires")
 }
 
@@ -102,7 +102,7 @@ func TestBatchWebhookProcessEventsAfterStopV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 	stopCh := make(chan struct{})
 
 	backend.Run(stopCh)
@@ -127,13 +127,13 @@ func TestBatchWebhookShutdownV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 	backend.ProcessEvents(events...)
 
 	go func() {
 		// Assume stopCh was closed.
 		close(backend.buffer)
-		backend.sendBatchEvents(backend.collectLastEvents())
+		backend.processEvents(backend.collectLastEvents())
 	}()
 
 	<-got
@@ -171,7 +171,7 @@ func TestBatchWebhookEmptyBufferV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time, 1)
@@ -179,16 +179,16 @@ func TestBatchWebhookEmptyBufferV1Alpha1(t *testing.T) {
 	timer <- time.Now() // Timer is done.
 
 	// Buffer is empty, no events have been queued. This should exit but send no events.
-	backend.sendBatchEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(stopCh, timer))
 
-	// Send additional events after the sendBatchEvents has been called.
+	// Send additional events after the processEvents has been called.
 	backend.ProcessEvents(events...)
 	go func() {
 		waitForEmptyBuffer(backend)
 		timer <- time.Now()
 	}()
 
-	backend.sendBatchEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(stopCh, timer))
 
 	// Make sure we didn't get a POST with zero events.
 	require.Equal(t, expected, <-got, "expected one event")
@@ -204,7 +204,7 @@ func TestBatchBufferFullV1Alpha1(t *testing.T) {
 	}))
 	defer s.Close()
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 
 	// Make sure this doesn't block.
 	backend.ProcessEvents(events...)
@@ -242,7 +242,7 @@ func TestBatchRunV1Alpha1(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 
 	// Test the Run codepath. E.g. that the spawned goroutines behave correctly.
 	backend.Run(stopCh)
@@ -280,7 +280,7 @@ func TestBatchConcurrentRequestsV1Alpha1(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
-	backend := newTestBatchWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
+	backend := newWebhook(t, s.URL, auditv1alpha1.SchemeGroupVersion)
 	backend.Run(stopCh)
 
 	backend.ProcessEvents(events...)
