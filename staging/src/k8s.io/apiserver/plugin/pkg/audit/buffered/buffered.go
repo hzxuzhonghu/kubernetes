@@ -234,22 +234,30 @@ func (b *bufferedBackend) ProcessEvents(ev ...*auditinternal.Event) {
 	// The following mechanism is in place to support the situation when audit
 	// events are still coming after the backend was stopped.
 	var sendErr error
+	var evIndex int
+
+	// If the backend was shut down and the buffer channel was closed, an
+	// attempt to add an event to it will result in panic that we should
+	// recover from.
+	defer func() {
+		if err := recover(); err != nil {
+			sendErr = errors.New("audit buffer shut down")
+		}
+		if sendErr != nil {
+			audit.HandlePluginError(pluginName, sendErr, ev[evIndex:]...)
+		}
+	}()
 
 	for i, e := range ev {
+		evIndex = i
 		// Per the audit.Backend interface these events are reused after being
 		// sent to the Sink. Deep copy and send the copy to the queue.
 		event := e.DeepCopy()
 
 		select {
 		case b.buffer <- event:
-		case <-b.stopCh:
-			sendErr = errors.New("audit buffer shut down")
 		default:
 			sendErr = errors.New("audit buffer queue blocked")
-		}
-
-		if sendErr != nil {
-			audit.HandlePluginError(pluginName, sendErr, ev[i:]...)
 			return
 		}
 	}

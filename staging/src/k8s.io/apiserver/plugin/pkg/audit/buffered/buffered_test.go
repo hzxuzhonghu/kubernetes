@@ -147,7 +147,7 @@ func TestBatchWebhookProcessEventsAfterStop(t *testing.T) {
 
 	backend.Run(stopCh)
 	close(stopCh)
-	<-backend.shutdownCh
+	close(backend.buffer)
 	backend.ProcessEvents(events...)
 	assert.Equal(t, 0, len(backend.buffer), "processed events after the backed has been stopped")
 }
