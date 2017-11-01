@@ -241,7 +241,7 @@ func (b *bufferedBackend) ProcessEvents(ev ...*auditinternal.Event) {
 	// recover from.
 	defer func() {
 		if err := recover(); err != nil {
-			sendErr = errors.New("audit buffer shut down")
+			sendErr = errors.New("panic: audit buffer shut down")
 		}
 		if sendErr != nil {
 			audit.HandlePluginError(pluginName, sendErr, ev[evIndex:]...)
@@ -253,6 +253,13 @@ func (b *bufferedBackend) ProcessEvents(ev ...*auditinternal.Event) {
 		// Per the audit.Backend interface these events are reused after being
 		// sent to the Sink. Deep copy and send the copy to the queue.
 		event := e.DeepCopy()
+		// Check if backend is stopped to prevent panic.
+		select {
+		case <-b.stopCh:
+			sendErr = errors.New("audit buffer shut down")
+			return
+		default:
+		}
 
 		select {
 		case b.buffer <- event:

@@ -198,7 +198,7 @@ func (o *AuditLogOptions) AddFlags(fs *pflag.FlagSet) {
 		"Format of saved audits. \"legacy\" indicates 1-line text format for each event."+
 			" \"json\" indicates structured json format. Requires the 'AdvancedAuditing' feature"+
 			" gate. Known formats are "+strings.Join(pluginlog.AllowedFormats, ",")+".")
-	fs.BoolVar(&o.IsBuffered, "audit-log-sync", o.IsBuffered,
+	fs.BoolVar(&o.IsBuffered, "audit-log-buffered", o.IsBuffered,
 		"Strategy for logging audit events. false indicates logging events synchronously."+
 			" true causes the backend to buffer and log events asynchronously.")
 }
@@ -242,7 +242,7 @@ func (o *AuditWebhookOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.ConfigFile, "audit-webhook-config-file", o.ConfigFile,
 		"Path to a kubeconfig formatted file that defines the audit webhook configuration."+
 			" Requires the 'AdvancedAuditing' feature gate.")
-	fs.BoolVar(&o.IsBuffered, "audit-webhook-sync", o.IsBuffered,
+	fs.BoolVar(&o.IsBuffered, "audit-webhook-buffered", o.IsBuffered,
 		"Strategy for sending audit events. false indicates sending events should block"+
 			" until server responses. true causes the webhook to buffer and send events"+
 			" asynchronously.")
