@@ -18,13 +18,9 @@ package buffered
 
 import (
 	stdjson "encoding/json"
-	"fmt"
-	"io"
 	"io/ioutil"
-	"net/http"
 	"net/http/httptest"
 	"os"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,63 +31,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	auditinternal "k8s.io/apiserver/pkg/apis/audit"
 	auditv1beta1 "k8s.io/apiserver/pkg/apis/audit/v1beta1"
-	"k8s.io/apiserver/pkg/audit"
 	pluginlog "k8s.io/apiserver/plugin/pkg/audit/log"
 	pluginwebhook "k8s.io/apiserver/plugin/pkg/audit/webhook"
 	"k8s.io/client-go/tools/clientcmd/api/v1"
 )
-
-// newWebhookHandler returns a handler which recieves webhook events and decodes the
-// request body. The caller passes a callback which is called on each webhook POST.
-// The object passed to cb is of the same type as list.
-func newWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime.Object)) http.Handler {
-	s := json.NewSerializer(json.DefaultMetaFactory, audit.Scheme, audit.Scheme, false)
-	return &testWebhookHandler{
-		t:          t,
-		list:       list,
-		onEvents:   cb,
-		serializer: s,
-	}
-}
-
-type testWebhookHandler struct {
-	t *testing.T
-
-	list     runtime.Object
-	onEvents func(events runtime.Object)
-
-	serializer runtime.Serializer
-}
-
-func (t *testWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	err := func() error {
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return fmt.Errorf("read webhook request body: %v", err)
-		}
-
-		obj, _, err := t.serializer.Decode(body, nil, t.list.DeepCopyObject())
-		if err != nil {
-			return fmt.Errorf("decode request body: %v", err)
-		}
-		if reflect.TypeOf(obj).Elem() != reflect.TypeOf(t.list).Elem() {
-			return fmt.Errorf("expected %T, got %T", t.list, obj)
-		}
-		t.onEvents(obj)
-		return nil
-	}()
-
-	if err == nil {
-		io.WriteString(w, "{}")
-		return
-	}
-	// In a goroutine, can't call Fatal.
-	assert.NoError(t.t, err, "failed to read request body")
-	http.Error(w, err.Error(), http.StatusInternalServerError)
-}
 
 func newWebhook(t *testing.T, endpoint string, groupVersion schema.GroupVersion) *bufferedBackend {
 	config := v1.Config{
@@ -134,18 +79,19 @@ func TestBatchWebhookMaxEvents(t *testing.T) {
 	}
 
 	got := make(chan int, 2)
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		got <- len(events.(*auditv1beta1.EventList).Items)
 	}))
 	defer s.Close()
 
-	backend := newWebhook(t, s.URL, auditv1beta1.SchemeGroupVersion)
-	backend.ProcessEvents(events...)
-
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time, 1)
 
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend := newWebhook(t, s.URL, auditv1beta1.SchemeGroupVersion)
+	backend.stopCh = stopCh
+	backend.ProcessEvents(events...)
+
+	backend.processEvents(backend.collectEvents(timer))
 	require.Equal(t, defaultBatchMaxSize, <-got, "did not get batch max size")
 
 	go func() {
@@ -153,7 +99,7 @@ func TestBatchWebhookMaxEvents(t *testing.T) {
 		timer <- time.Now()         // Trigger the wait timeout
 	}()
 
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(timer))
 	require.Equal(t, nRest, <-got, "failed to get the rest of the events")
 }
 
@@ -165,22 +111,22 @@ func TestBatchWebhookStopCh(t *testing.T) {
 
 	expected := len(events)
 	got := make(chan int, 2)
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		got <- len(events.(*auditv1beta1.EventList).Items)
 	}))
 	defer s.Close()
-
-	backend := newWebhook(t, s.URL, auditv1beta1.SchemeGroupVersion)
-	backend.ProcessEvents(events...)
-
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time)
+
+	backend := newWebhook(t, s.URL, auditv1beta1.SchemeGroupVersion)
+	backend.stopCh = stopCh
+	backend.ProcessEvents(events...)
 
 	go func() {
 		waitForEmptyBuffer(backend)
 		close(stopCh) // stop channel has stopped
 	}()
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(timer))
 	require.Equal(t, expected, <-got, "get queued events after timer expires")
 }
 
@@ -191,7 +137,7 @@ func TestBatchWebhookProcessEventsAfterStop(t *testing.T) {
 	}
 
 	got := make(chan struct{})
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		close(got)
 	}))
 	defer s.Close()
@@ -215,7 +161,7 @@ func TestBatchWebhookShutdown(t *testing.T) {
 	got := make(chan struct{})
 	contReqCh := make(chan struct{})
 	shutdownCh := make(chan struct{})
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		close(got)
 		<-contReqCh
 	}))
@@ -260,7 +206,7 @@ func TestBatchWebhookEmptyBuffer(t *testing.T) {
 
 	expected := len(events)
 	got := make(chan int, 2)
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		got <- len(events.(*auditv1beta1.EventList).Items)
 	}))
 	defer s.Close()
@@ -269,11 +215,11 @@ func TestBatchWebhookEmptyBuffer(t *testing.T) {
 
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time, 1)
-
 	timer <- time.Now() // Timer is done.
+	backend.stopCh = stopCh
 
 	// Buffer is empty, no events have been queued. This should exit but send no events.
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(timer))
 
 	// Send additional events after the sendBatchEvents has been called.
 	backend.ProcessEvents(events...)
@@ -282,7 +228,7 @@ func TestBatchWebhookEmptyBuffer(t *testing.T) {
 		timer <- time.Now()
 	}()
 
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(timer))
 
 	// Make sure we didn't get a POST with zero events.
 	require.Equal(t, expected, <-got, "expected one event")
@@ -293,7 +239,7 @@ func TestBatchWebhookBufferFull(t *testing.T) {
 	for i := range events {
 		events[i] = &auditinternal.Event{}
 	}
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		// Do nothing.
 	}))
 	defer s.Close()
@@ -326,7 +272,7 @@ func TestBatchWebhookRun(t *testing.T) {
 		close(done)
 	}()
 
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(obj runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(obj runtime.Object) {
 		events := obj.(*auditv1beta1.EventList)
 		atomic.AddInt64(got, int64(len(events.Items)))
 		wg.Add(-len(events.Items))
@@ -360,7 +306,7 @@ func TestBatchWebhookConcurrentRequests(t *testing.T) {
 	wg := new(sync.WaitGroup)
 	wg.Add(len(events))
 
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(pluginwebhook.NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		wg.Add(-len(events.(*auditv1beta1.EventList).Items))
 
 		// Since the webhook makes concurrent requests, blocking on the webhook response
@@ -420,13 +366,15 @@ func TestBatchLogMaxEvents(t *testing.T) {
 		events[i] = &auditinternal.Event{}
 	}
 
-	backend, f := newLog(t, pluginlog.FormatJson, auditv1beta1.SchemeGroupVersion)
-	backend.ProcessEvents(events...)
-
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time, 1)
 
-	backend.backend.ProcessEvents(backend.collectEvents(stopCh, timer)...)
+	backend, f := newLog(t, pluginlog.FormatJson, auditv1beta1.SchemeGroupVersion)
+	backend.stopCh = stopCh
+
+	backend.ProcessEvents(events...)
+
+	backend.backend.ProcessEvents(backend.collectEvents(timer)...)
 	require.Equal(t, 1, int(atomic.LoadInt32(&f.got)), "did not get batch max size")
 
 	go func() {
@@ -434,7 +382,7 @@ func TestBatchLogMaxEvents(t *testing.T) {
 		timer <- time.Now()         // Trigger the wait timeout
 	}()
 
-	backend.backend.ProcessEvents(backend.collectEvents(stopCh, timer)...)
+	backend.backend.ProcessEvents(backend.collectEvents(timer)...)
 	require.Equal(t, 2, int(atomic.LoadInt32(&f.got)), "failed to get the rest of the events")
 }
 
@@ -446,17 +394,19 @@ func TestBatchLogStopCh(t *testing.T) {
 
 	expected := len(events)
 
-	backend, f := newLog(t, pluginlog.FormatJson, auditv1beta1.SchemeGroupVersion)
-	backend.ProcessEvents(events...)
-
 	stopCh := make(chan struct{})
 	timer := make(chan time.Time)
+
+	backend, f := newLog(t, pluginlog.FormatJson, auditv1beta1.SchemeGroupVersion)
+	backend.stopCh = stopCh
+
+	backend.ProcessEvents(events...)
 
 	go func() {
 		waitForEmptyBuffer(backend)
 		close(stopCh) // stop channel has stopped
 	}()
-	backend.backend.ProcessEvents(backend.collectEvents(stopCh, timer)...)
+	backend.backend.ProcessEvents(backend.collectEvents(timer)...)
 	require.Equal(t, expected, int(atomic.LoadInt32(&f.got)), "get queued events after timer expires")
 }
 
@@ -552,8 +502,10 @@ func TestBatchLogEmptyBuffer(t *testing.T) {
 
 	timer <- time.Now() // Timer is done.
 
+	backend.stopCh = stopCh
+
 	// Buffer is empty, no events have been queued. This should exit but send no events.
-	backend.processEvents(backend.collectEvents(stopCh, timer))
+	backend.processEvents(backend.collectEvents(timer))
 
 	// Send additional events after the sendBatchEvents has been called.
 	backend.ProcessEvents(events...)
@@ -562,7 +514,7 @@ func TestBatchLogEmptyBuffer(t *testing.T) {
 		timer <- time.Now()
 	}()
 
-	backend.backend.ProcessEvents(backend.collectEvents(stopCh, timer)...)
+	backend.backend.ProcessEvents(backend.collectEvents(timer)...)
 
 	// Make sure we didn't get a POST with zero events.
 	require.Equal(t, expected, int(atomic.LoadInt32(&f.got)), "expected one event")

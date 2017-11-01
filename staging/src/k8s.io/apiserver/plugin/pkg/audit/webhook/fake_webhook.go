@@ -17,34 +17,26 @@ limitations under the License.
 package webhook
 
 import (
-	stdjson "encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer/json"
-	auditinternal "k8s.io/apiserver/pkg/apis/audit"
-	auditv1beta1 "k8s.io/apiserver/pkg/apis/audit/v1beta1"
 	"k8s.io/apiserver/pkg/audit"
-	"k8s.io/client-go/tools/clientcmd/api/v1"
 )
 
-// newWebhookHandler returns a handler which recieves webhook events and decodes the
+// NewFakeWebhookHandler returns a handler which recieves webhook events and decodes the
 // request body. The caller passes a callback which is called on each webhook POST.
 // The object passed to cb is of the same type as list.
-func newWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime.Object)) http.Handler {
+func NewFakeWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime.Object)) http.Handler {
 	s := json.NewSerializer(json.DefaultMetaFactory, audit.Scheme, audit.Scheme, false)
-	return &testWebhookHandler{
+	return &fakeWebhookHandler{
 		t:          t,
 		list:       list,
 		onEvents:   cb,
@@ -52,7 +44,7 @@ func newWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime
 	}
 }
 
-type testWebhookHandler struct {
+type fakeWebhookHandler struct {
 	t *testing.T
 
 	list     runtime.Object
@@ -61,7 +53,7 @@ type testWebhookHandler struct {
 	serializer runtime.Serializer
 }
 
-func (t *testWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (t *fakeWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := func() error {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -86,43 +78,4 @@ func (t *testWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// In a goroutine, can't call Fatal.
 	assert.NoError(t.t, err, "failed to read request body")
 	http.Error(w, err.Error(), http.StatusInternalServerError)
-}
-
-func newTestBackend(t *testing.T, endpoint string, groupVersion schema.GroupVersion) *backend {
-	config := v1.Config{
-		Clusters: []v1.NamedCluster{
-			{Cluster: v1.Cluster{Server: endpoint, InsecureSkipTLSVerify: true}},
-		},
-	}
-	f, err := ioutil.TempFile("", "k8s_audit_webhook_test_")
-	require.NoError(t, err, "creating temp file")
-
-	defer func() {
-		f.Close()
-		os.Remove(f.Name())
-	}()
-
-	// NOTE(ericchiang): Do we need to use a proper serializer?
-	require.NoError(t, stdjson.NewEncoder(f).Encode(config), "writing kubeconfig")
-
-	backend, err := NewBackend(f.Name(), groupVersion)
-	require.NoError(t, err, "initializing backend")
-
-	return backend.(*backend)
-}
-
-func TestWebhook(t *testing.T) {
-	gotEvents := false
-	defer func() { require.True(t, gotEvents, "no events received") }()
-
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
-		gotEvents = true
-	}))
-	defer s.Close()
-
-	backend := newTestBackend(t, s.URL, auditv1beta1.SchemeGroupVersion)
-
-	// Ensure this doesn't return a serialization error.
-	event := &auditinternal.Event{}
-	require.NoError(t, backend.processEvents(event), "failed to send events")
 }

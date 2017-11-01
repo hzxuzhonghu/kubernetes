@@ -67,8 +67,7 @@ type AuditLogOptions struct {
 	MaxBackups int
 	MaxSize    int
 	Format     string
-	// Defaults to asynchronous mode.
-	SyncMode bool
+	IsBuffered bool
 }
 
 // AuditWebhookOptions control the webhook configuration for audit events.
@@ -77,14 +76,13 @@ type AuditWebhookOptions struct {
 	// Should the webhook asynchronous batch events to the webhook backend or
 	// should the webhook block responses?
 	//
-	// Defaults to asynchronous mode.
-	SyncMode bool
+	IsBuffered bool
 }
 
 func NewAuditOptions() *AuditOptions {
 	return &AuditOptions{
-		WebhookOptions: AuditWebhookOptions{SyncMode: false},
-		LogOptions:     AuditLogOptions{Format: pluginlog.FormatJson, SyncMode: false},
+		WebhookOptions: AuditWebhookOptions{IsBuffered: true},
+		LogOptions:     AuditLogOptions{Format: pluginlog.FormatJson, IsBuffered: true},
 	}
 }
 
@@ -200,9 +198,9 @@ func (o *AuditLogOptions) AddFlags(fs *pflag.FlagSet) {
 		"Format of saved audits. \"legacy\" indicates 1-line text format for each event."+
 			" \"json\" indicates structured json format. Requires the 'AdvancedAuditing' feature"+
 			" gate. Known formats are "+strings.Join(pluginlog.AllowedFormats, ",")+".")
-	fs.BoolVar(&o.SyncMode, "audit-log-sync", o.SyncMode,
-		"Strategy for logging audit events. true indicates logging events synchronously."+
-			" false causes the backend to buffer and log events asynchronously.")
+	fs.BoolVar(&o.IsBuffered, "audit-log-sync", o.IsBuffered,
+		"Strategy for logging audit events. false indicates logging events synchronously."+
+			" true causes the backend to buffer and log events asynchronously.")
 }
 
 func (o *AuditLogOptions) getWriter() io.Writer {
@@ -226,7 +224,7 @@ func (o *AuditLogOptions) advancedApplyTo(c *server.Config) error {
 	if w := o.getWriter(); w != nil {
 		backend := pluginlog.NewBackend(w, o.Format, auditv1beta1.SchemeGroupVersion)
 
-		if !o.SyncMode {
+		if !o.IsBuffered {
 			backend = pluginbuffered.NewBackend(backend)
 		}
 
@@ -244,9 +242,9 @@ func (o *AuditWebhookOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.ConfigFile, "audit-webhook-config-file", o.ConfigFile,
 		"Path to a kubeconfig formatted file that defines the audit webhook configuration."+
 			" Requires the 'AdvancedAuditing' feature gate.")
-	fs.BoolVar(&o.SyncMode, "audit-webhook-sync", o.SyncMode,
-		"Strategy for sending audit events. true indicates sending events should block"+
-			" until server responses. false causes the webhook to buffer and send events"+
+	fs.BoolVar(&o.IsBuffered, "audit-webhook-sync", o.IsBuffered,
+		"Strategy for sending audit events. false indicates sending events should block"+
+			" until server responses. true causes the webhook to buffer and send events"+
 			" asynchronously.")
 }
 
@@ -260,7 +258,7 @@ func (o *AuditWebhookOptions) applyTo(c *server.Config) error {
 		return fmt.Errorf("initializing audit webhook: %v", err)
 	}
 
-	if !o.SyncMode {
+	if !o.IsBuffered {
 		backend = pluginbuffered.NewBackend(backend)
 	}
 

@@ -68,6 +68,9 @@ type bufferedBackend struct {
 	// if this amount of time has been reached.
 	maxBatchWait time.Duration
 
+	// Channel to signal that the worker routine to stop and the buffer channel to close.
+	stopCh <-chan struct{}
+
 	// Channel to signal that the worker routine has stopped and therefore
 	// it's safe to assume that no new requests will be initiated.
 	shutdownCh chan struct{}
@@ -87,11 +90,12 @@ type bufferedBackend struct {
 var _ audit.Backend = &bufferedBackend{}
 
 func (b *bufferedBackend) Run(stopCh <-chan struct{}) error {
+	b.stopCh = stopCh
 	go func() {
 		// Signal that the working routine has exited.
 		defer close(b.shutdownCh)
 
-		b.runWorkerRoutine(stopCh)
+		b.runWorkerRoutine()
 
 		// Handle the events that were received after the last buffer
 		// scraping and before this line. Since the buffer is closed, no new
@@ -127,24 +131,24 @@ func (b *bufferedBackend) Shutdown() {
 }
 
 // runWorkerRoutine runs a loop that collects events from the buffer. When
-// stopCh is closed, runWorkerRoutine stops and closes the buffer.
-func (b *bufferedBackend) runWorkerRoutine(stopCh <-chan struct{}) {
+// b.stopCh is closed, runWorkerRoutine stops and closes the buffer.
+func (b *bufferedBackend) runWorkerRoutine() {
 	defer close(b.buffer)
+	t := time.NewTimer(b.maxBatchWait)
+	defer t.Stop()
 
 	for {
 		func() {
 			// Recover from any panics caused by this function so a panic in the
 			// goroutine can't bring down the main routine.
 			defer runtime.HandleCrash()
+			defer t.Reset(b.maxBatchWait)
 
-			t := time.NewTimer(b.maxBatchWait)
-			defer t.Stop() // Release ticker resources
-
-			b.processEvents(b.collectEvents(stopCh, t.C))
+			b.processEvents(b.collectEvents(t.C))
 		}()
 
 		select {
-		case <-stopCh:
+		case <-b.stopCh:
 			return
 		default:
 		}
@@ -158,9 +162,9 @@ func (b *bufferedBackend) runWorkerRoutine(stopCh <-chan struct{}) {
 //
 //   * Some maximum number of events are received.
 //   * Timer has passed, all queued events are sent.
-//   * StopCh is closed, all queued events are sent.
+//   * b.stopCh is closed, all queued events are sent.
 //
-func (b *bufferedBackend) collectEvents(stopCh <-chan struct{}, timer <-chan time.Time) []*auditinternal.Event {
+func (b *bufferedBackend) collectEvents(timer <-chan time.Time) []*auditinternal.Event {
 	var events []*auditinternal.Event
 
 L:
@@ -175,8 +179,8 @@ L:
 		case <-timer:
 			// Timer has expired. Send whatever events are in the queue.
 			break L
-		case <-stopCh:
-			// Webhook has shut down. Send the last events.
+		case <-b.stopCh:
+			// backend has been stopped. Send the last events.
 			break L
 		}
 	}
@@ -216,41 +220,34 @@ func (b *bufferedBackend) processEvents(events []*auditinternal.Event) {
 	// will not prevent other batches from being proceed further this point.
 	b.reqMutex.RLock()
 	go func() {
-		// Execute the webhook POST in a goroutine to keep it from blocking.
-		// This lets the webhook continue to drain the queue immediatly.
-
 		defer b.reqMutex.RUnlock()
 		defer runtime.HandleCrash()
+
+		// Execute the real processing in a goroutine to keep it from blocking.
+		// This lets the backend continue to drain the queue immediately.
 		b.backend.ProcessEvents(events...)
 	}()
 	return
 }
 
 func (b *bufferedBackend) ProcessEvents(ev ...*auditinternal.Event) {
+	// The following mechanism is in place to support the situation when audit
+	// events are still coming after the backend was stopped.
+	var sendErr error
+
 	for i, e := range ev {
 		// Per the audit.Backend interface these events are reused after being
 		// sent to the Sink. Deep copy and send the copy to the queue.
 		event := e.DeepCopy()
 
-		// The following mechanism is in place to support the situation when audit
-		// events are still coming after the backend was shut down.
-		var sendErr error
-		func() {
-			// If the backend was shut down and the buffer channel was closed, an
-			// attempt to add an event to it will result in panic that we should
-			// recover from.
-			defer func() {
-				if err := recover(); err != nil {
-					sendErr = errors.New("audit buffer shut down")
-				}
-			}()
+		select {
+		case b.buffer <- event:
+		case <-b.stopCh:
+			sendErr = errors.New("audit buffer shut down")
+		default:
+			sendErr = errors.New("audit buffer queue blocked")
+		}
 
-			select {
-			case b.buffer <- event:
-			default:
-				sendErr = errors.New("audit buffer queue blocked")
-			}
-		}()
 		if sendErr != nil {
 			audit.HandlePluginError(pluginName, sendErr, ev[i:]...)
 			return
