@@ -18,75 +18,19 @@ package webhook
 
 import (
 	stdjson "encoding/json"
-	"fmt"
-	"io"
 	"io/ioutil"
-	"net/http"
 	"net/http/httptest"
 	"os"
-	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	auditinternal "k8s.io/apiserver/pkg/apis/audit"
 	auditv1beta1 "k8s.io/apiserver/pkg/apis/audit/v1beta1"
-	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/client-go/tools/clientcmd/api/v1"
 )
-
-// newWebhookHandler returns a handler which recieves webhook events and decodes the
-// request body. The caller passes a callback which is called on each webhook POST.
-// The object passed to cb is of the same type as list.
-func newWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime.Object)) http.Handler {
-	s := json.NewSerializer(json.DefaultMetaFactory, audit.Scheme, audit.Scheme, false)
-	return &testWebhookHandler{
-		t:          t,
-		list:       list,
-		onEvents:   cb,
-		serializer: s,
-	}
-}
-
-type testWebhookHandler struct {
-	t *testing.T
-
-	list     runtime.Object
-	onEvents func(events runtime.Object)
-
-	serializer runtime.Serializer
-}
-
-func (t *testWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	err := func() error {
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return fmt.Errorf("read webhook request body: %v", err)
-		}
-
-		obj, _, err := t.serializer.Decode(body, nil, t.list.DeepCopyObject())
-		if err != nil {
-			return fmt.Errorf("decode request body: %v", err)
-		}
-		if reflect.TypeOf(obj).Elem() != reflect.TypeOf(t.list).Elem() {
-			return fmt.Errorf("expected %T, got %T", t.list, obj)
-		}
-		t.onEvents(obj)
-		return nil
-	}()
-
-	if err == nil {
-		io.WriteString(w, "{}")
-		return
-	}
-	// In a goroutine, can't call Fatal.
-	assert.NoError(t.t, err, "failed to read request body")
-	http.Error(w, err.Error(), http.StatusInternalServerError)
-}
 
 func newTestBackend(t *testing.T, endpoint string, groupVersion schema.GroupVersion) *backend {
 	config := v1.Config{
@@ -105,17 +49,17 @@ func newTestBackend(t *testing.T, endpoint string, groupVersion schema.GroupVers
 	// NOTE(ericchiang): Do we need to use a proper serializer?
 	require.NoError(t, stdjson.NewEncoder(f).Encode(config), "writing kubeconfig")
 
-	backend, err := NewBackend(f.Name(), groupVersion)
+	b, err := NewBackend(f.Name(), groupVersion)
 	require.NoError(t, err, "initializing backend")
 
-	return backend.(*backend)
+	return b.(*backend)
 }
 
 func TestWebhook(t *testing.T) {
 	gotEvents := false
 	defer func() { require.True(t, gotEvents, "no events received") }()
 
-	s := httptest.NewServer(newWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
+	s := httptest.NewServer(NewFakeWebhookHandler(t, &auditv1beta1.EventList{}, func(events runtime.Object) {
 		gotEvents = true
 	}))
 	defer s.Close()
