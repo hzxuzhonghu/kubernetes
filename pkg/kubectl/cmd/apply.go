@@ -616,8 +616,12 @@ func (p *patcher) patchSimple(obj runtime.Object, modified []byte, source, names
 			return nil, nil, cmdutil.AddSourceToErr(fmt.Sprintf(createPatchErrFormat, original, modified, current), source, err)
 		}
 	}
-
-	patchedObj, err := p.helper.Patch(namespace, name, patchType, patch)
+	var patchedObj runtime.Object
+	if len(patch) == 2 {
+		patchedObj, err = p.helper.Get(namespace, name, false)
+	} else {
+		patchedObj, err = p.helper.Patch(namespace, name, patchType, patch)
+	}
 	return patch, patchedObj, err
 }
 
