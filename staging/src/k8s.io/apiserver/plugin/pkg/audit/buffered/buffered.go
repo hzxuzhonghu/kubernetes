@@ -52,6 +52,7 @@ func NewBackend(backend audit.Backend) audit.Backend {
 		maxBatchSize: defaultBatchMaxSize,
 		maxBatchWait: defaultBatchMaxWait,
 		shutdownCh:   make(chan struct{}),
+		wg:           sync.WaitGroup{},
 		throttle:     flowcontrol.NewTokenBucketRateLimiter(defaultBatchThrottleQPS, defaultBatchThrottleBurst),
 	}
 }
@@ -75,13 +76,11 @@ type bufferedBackend struct {
 	// it's safe to assume that no new requests will be initiated.
 	shutdownCh chan struct{}
 
-	// The consuming routine locks reqMutex for reading before initiating a new
-	// goroutine to consume a request. This goroutine then unlocks reqMutex for
-	// reading when completed. The Shutdown method locks reqMutex for writing
-	// after the consuming routine has exited. When reqMutex is locked for writing,
-	// all requests have been completed and no new will be spawned, since the
-	// working routine is not running anymore.
-	reqMutex sync.RWMutex
+	// The consuming routine calls WaitGroup.Add before initiating a new
+	// goroutine to consume a request. This goroutine then calls WaitGroup.Done
+	// when completed. The Shutdown method calls WaitGroup.Wait to wait for all
+	// consuming routines exit.
+	wg sync.WaitGroup
 
 	// Limits the number of requests sent to the backend per second.
 	throttle flowcontrol.RateLimiter
@@ -121,13 +120,8 @@ func (b *bufferedBackend) Run(stopCh <-chan struct{}) error {
 func (b *bufferedBackend) Shutdown() {
 	<-b.shutdownCh
 
-	// Write locking reqMutex will guarantee that all requests will be completed
-	// by the time the goroutine continues the execution. Since this line is
-	// executed after shutdownCh was closed, no new requests will follow this
-	// lock, because read lock is called in the same goroutine that closes
-	// shutdownCh before exiting.
-	b.reqMutex.Lock()
-	b.reqMutex.Unlock()
+	// Wait blocks here until all consuming routines exit.
+	b.wg.Wait()
 }
 
 // runWorkerRoutine runs a loop that collects events from the buffer. When
@@ -215,12 +209,9 @@ func (b *bufferedBackend) processEvents(events []*auditinternal.Event) {
 		b.throttle.Accept()
 	}
 
-	// Locking reqMutex for read will guarantee that the shutdown process will
-	// block until the goroutine started below is finished. At the same time, it
-	// will not prevent other batches from being proceed further this point.
-	b.reqMutex.RLock()
+	b.wg.Add(1)
 	go func() {
-		defer b.reqMutex.RUnlock()
+		defer b.wg.Done()
 		defer runtime.HandleCrash()
 
 		// Execute the real processing in a goroutine to keep it from blocking.
