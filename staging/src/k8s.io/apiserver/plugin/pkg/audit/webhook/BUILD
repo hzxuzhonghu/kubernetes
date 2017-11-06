@@ -15,25 +15,22 @@ go_test(
         "//vendor/github.com/stretchr/testify/require:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/serializer/json:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit/v1beta1:go_default_library",
+        "//vendor/k8s.io/apiserver/pkg/audit:go_default_library",
         "//vendor/k8s.io/client-go/tools/clientcmd/api/v1:go_default_library",
     ],
 )
 
 go_library(
     name = "go_default_library",
-    srcs = [
-        "fake_webhook.go",
-        "webhook.go",
-    ],
+    srcs = ["webhook.go"],
     importpath = "k8s.io/apiserver/plugin/pkg/audit/webhook",
     deps = [
         "//vendor/k8s.io/apimachinery/pkg/apimachinery/announced:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apimachinery/registered:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/runtime/serializer/json:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit/install:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit/v1alpha1:go_default_library",

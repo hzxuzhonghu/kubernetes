@@ -15,23 +15,14 @@ go_library(
 
 go_test(
     name = "go_default_test",
-    srcs = [
-        "buffered_test.go",
-        "buffered_webhook_v1alpha1_test.go",
-    ],
+    srcs = ["buffered_test.go"],
     importpath = "k8s.io/apiserver/plugin/pkg/audit/buffered",
     library = ":go_default_library",
     deps = [
         "//vendor/github.com/stretchr/testify/assert:go_default_library",
         "//vendor/github.com/stretchr/testify/require:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/apis/audit:go_default_library",
-        "//vendor/k8s.io/apiserver/pkg/apis/audit/v1alpha1:go_default_library",
-        "//vendor/k8s.io/apiserver/pkg/apis/audit/v1beta1:go_default_library",
-        "//vendor/k8s.io/apiserver/plugin/pkg/audit/log:go_default_library",
-        "//vendor/k8s.io/apiserver/plugin/pkg/audit/webhook:go_default_library",
-        "//vendor/k8s.io/client-go/tools/clientcmd/api/v1:go_default_library",
+        "//vendor/k8s.io/apiserver/pkg/audit:go_default_library",
     ],
 )
 
