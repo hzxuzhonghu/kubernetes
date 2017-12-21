@@ -4,6 +4,7 @@ go_library(
     name = "go_default_library",
     srcs = [
         "admission.go",
+        "api_enablement.go",
         "audit.go",
         "authentication.go",
         "authorization.go",
@@ -22,6 +23,7 @@ go_library(
         "//vendor/github.com/pborman/uuid:go_default_library",
         "//vendor/github.com/spf13/pflag:go_default_library",
         "//vendor/gopkg.in/natefinch/lumberjack.v2:go_default_library",
+        "//vendor/k8s.io/apimachinery/pkg/apimachinery/registered:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
@@ -47,6 +49,7 @@ go_library(
         "//vendor/k8s.io/apiserver/pkg/registry/generic/registry:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/server:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/server/healthz:go_default_library",
+        "//vendor/k8s.io/apiserver/pkg/server/resourceconfig:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/server/storage:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/storage/etcd3/preflight:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/storage/storagebackend:go_default_library",
