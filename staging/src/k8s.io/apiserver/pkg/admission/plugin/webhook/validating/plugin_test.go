@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package mutating
+package validating
 
 import (
 	"crypto/tls"
@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/admission/configuration"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/config"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/testcerts"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -57,6 +58,10 @@ func (f *fakeHookSource) Webhooks() []registrationv1beta1.Webhook {
 		}
 	}
 	return f.hooks
+}
+
+func (f *fakeHookSource) HasSynched() bool {
+	return true
 }
 
 func (f *fakeHookSource) Run(stopCh <-chan struct{}) {}
@@ -115,8 +120,8 @@ func (c urlConfigGenerator) ccfgURL(urlPath string) registrationv1beta1.WebhookC
 	}
 }
 
-// TestAdmit tests that MutatingWebhook#Admit works as expected
-func TestAdmit(t *testing.T) {
+// TestValidate tests that ValidatingWebhook#Validate works as expected
+func TestValidate(t *testing.T) {
 	scheme := runtime.NewScheme()
 	v1beta1.AddToScheme(scheme)
 	corev1.AddToScheme(scheme)
@@ -128,7 +133,7 @@ func TestAdmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("this should never happen? %v", err)
 	}
-	wh, err := NewMutatingWebhook(nil)
+	wh, err := NewValidatingAdmissionWebhook(nil, configuration.NewValidatingWebhookConfigurationManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,6 +365,28 @@ func TestAdmit(t *testing.T) {
 			},
 			errorContains: "without explanation",
 		},
+		"absent response and fail open": {
+			hookSource: fakeHookSource{
+				hooks: []registrationv1beta1.Webhook{{
+					Name:          "nilResponse",
+					ClientConfig:  ccfgURL("nilResponse"),
+					FailurePolicy: &policyIgnore,
+					Rules:         matchEverythingRules,
+				}},
+			},
+			expectAllow: true,
+		},
+		"absent response and fail closed": {
+			hookSource: fakeHookSource{
+				hooks: []registrationv1beta1.Webhook{{
+					Name:          "nilResponse",
+					ClientConfig:  ccfgURL("nilResponse"),
+					FailurePolicy: &policyFail,
+					Rules:         matchEverythingRules,
+				}},
+			},
+			errorContains: "Webhook response was absent",
+		},
 		// No need to test everything with the url case, since only the
 		// connection is different.
 	}
@@ -369,8 +396,8 @@ func TestAdmit(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			wh.hookSource = &tt.hookSource
-			err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, name, resource, subResource, operation, &userInfo))
+			wh.Webhook.hookSource = &tt.hookSource
+			err = wh.Validate(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, name, resource, subResource, operation, &userInfo))
 			if tt.expectAllow != (err == nil) {
 				t.Errorf("expected allowed=%v, but got err=%v", tt.expectAllow, err)
 			}
@@ -387,8 +414,8 @@ func TestAdmit(t *testing.T) {
 	}
 }
 
-// TestAdmitCachedClient tests that MutatingWebhook#Admit should cache restClient
-func TestAdmitCachedClient(t *testing.T) {
+// TestValidateCachedClient tests that ValidatingWebhook#Validate should cache restClient
+func TestValidateCachedClient(t *testing.T) {
 	scheme := runtime.NewScheme()
 	v1beta1.AddToScheme(scheme)
 	corev1.AddToScheme(scheme)
@@ -400,7 +427,7 @@ func TestAdmitCachedClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("this should never happen? %v", err)
 	}
-	wh, err := NewMutatingWebhook(nil)
+	wh, err := NewValidatingAdmissionWebhook(nil, configuration.NewValidatingWebhookConfigurationManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +436,7 @@ func TestAdmitCachedClient(t *testing.T) {
 		t.Fatalf("cannot create client manager: %v", err)
 	}
 	cm.SetServiceResolver(fakeServiceResolver{base: *serverURL})
-	wh.clientManager = cm
+	wh.Webhook.clientManager = cm
 	wh.SetScheme(scheme)
 	namespace := "webhook-test"
 	wh.namespaceMatcher.NamespaceLister = fakeNamespaceLister{map[string]*corev1.Namespace{
@@ -529,15 +556,15 @@ func TestAdmitCachedClient(t *testing.T) {
 
 	for _, testcase := range cases {
 		t.Run(testcase.name, func(t *testing.T) {
-			wh.hookSource = &testcase.hookSource
+			wh.Webhook.hookSource = &testcase.hookSource
 			authInfoResolverCount := new(int32)
 			r := newFakeAuthenticationInfoResolver(authInfoResolverCount)
-			wh.clientManager.SetAuthenticationInfoResolver(r)
-			if err = wh.clientManager.Validate(); err != nil {
+			wh.Webhook.clientManager.SetAuthenticationInfoResolver(r)
+			if err = wh.Webhook.clientManager.Validate(); err != nil {
 				t.Fatal(err)
 			}
 
-			err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, testcase.name, resource, subResource, operation, &userInfo))
+			err = wh.Validate(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, testcase.name, resource, subResource, operation, &userInfo))
 			if testcase.expectAllow != (err == nil) {
 				t.Errorf("expected allowed=%v, but got err=%v", testcase.expectAllow, err)
 			}
@@ -608,6 +635,9 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 				Allowed: true,
 			},
 		})
+	case "/nilResposne":
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&v1beta1.AdmissionReview{})
 	default:
 		http.NotFound(w, r)
 	}
