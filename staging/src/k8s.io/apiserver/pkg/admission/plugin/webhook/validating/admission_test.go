@@ -47,7 +47,7 @@ type fakeHookSource struct {
 	err   error
 }
 
-func (f *fakeHookSource) Webhooks() *registrationv1beta1.ValidatingWebhookConfiguration {
+func (f *fakeHookSource) Webhooks() []registrationv1beta1.Webhook {
 	if f.err != nil {
 		return nil
 	}
@@ -56,7 +56,7 @@ func (f *fakeHookSource) Webhooks() *registrationv1beta1.ValidatingWebhookConfig
 			f.hooks[i].NamespaceSelector = &metav1.LabelSelector{}
 		}
 	}
-	return &registrationv1beta1.ValidatingWebhookConfiguration{Webhooks: f.hooks}
+	return f.hooks
 }
 
 func (f *fakeHookSource) Run(stopCh <-chan struct{}) {}

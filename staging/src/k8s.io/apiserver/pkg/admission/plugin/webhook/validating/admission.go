@@ -39,6 +39,7 @@ import (
 	admissionmetrics "k8s.io/apiserver/pkg/admission/metrics"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/config"
 	webhookerrors "k8s.io/apiserver/pkg/admission/plugin/webhook/errors"
+	"k8s.io/apiserver/pkg/admission/plugin/webhook/generic"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/namespace"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/request"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/rules"
@@ -62,11 +63,6 @@ func Register(plugins *admission.Plugins) {
 
 		return plugin, nil
 	})
-}
-
-// WebhookSource can list dynamic webhook plugins.
-type WebhookSource interface {
-	Webhooks() *v1beta1.ValidatingWebhookConfiguration
 }
 
 // NewValidatingAdmissionWebhook returns a generic admission webhook plugin.
@@ -104,7 +100,7 @@ var _ admission.ValidationInterface = &ValidatingAdmissionWebhook{}
 // ValidatingAdmissionWebhook is an implementation of admission.Interface.
 type ValidatingAdmissionWebhook struct {
 	*admission.Handler
-	hookSource       WebhookSource
+	hookSource       generic.Source
 	namespaceMatcher namespace.Matcher
 	clientManager    config.ClientManager
 	convertor        versioned.Convertor
@@ -168,17 +164,12 @@ func (a *ValidatingAdmissionWebhook) ValidateInitialization() error {
 	return nil
 }
 
-func (a *ValidatingAdmissionWebhook) loadConfiguration(attr admission.Attributes) *v1beta1.ValidatingWebhookConfiguration {
-	return a.hookSource.Webhooks()
-}
-
 // Validate makes an admission decision based on the request attributes.
 func (a *ValidatingAdmissionWebhook) Validate(attr admission.Attributes) error {
 	if !a.WaitForReady() {
 		return admission.NewForbidden(attr, fmt.Errorf("not yet ready to handle request"))
 	}
-	hookConfig := a.loadConfiguration(attr)
-	hooks := hookConfig.Webhooks
+	hooks := a.hookSource.Webhooks()
 	ctx := context.TODO()
 
 	var relevantHooks []*v1beta1.Webhook

@@ -24,6 +24,7 @@ import (
 	"k8s.io/api/admissionregistration/v1beta1"
 	"k8s.io/apimachinery/pkg/labels"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apiserver/pkg/admission/plugin/webhook/generic"
 	admissionregistrationinformers "k8s.io/client-go/informers/admissionregistration/v1beta1"
 	admissionregistrationlisters "k8s.io/client-go/listers/admissionregistration/v1beta1"
 	"k8s.io/client-go/tools/cache"
@@ -34,6 +35,8 @@ type ValidatingWebhookConfigurationManager struct {
 	configuration *atomic.Value
 	lister        admissionregistrationlisters.ValidatingWebhookConfigurationLister
 }
+
+var _ generic.Source = &ValidatingWebhookConfigurationManager{}
 
 func NewValidatingWebhookConfigurationManager(informer admissionregistrationinformers.ValidatingWebhookConfigurationInformer) *ValidatingWebhookConfigurationManager {
 	manager := &ValidatingWebhookConfigurationManager{
@@ -55,8 +58,8 @@ func NewValidatingWebhookConfigurationManager(informer admissionregistrationinfo
 }
 
 // Webhooks returns the merged ValidatingWebhookConfiguration.
-func (v *ValidatingWebhookConfigurationManager) Webhooks() *v1beta1.ValidatingWebhookConfiguration {
-	return v.configuration.Load().(*v1beta1.ValidatingWebhookConfiguration)
+func (v *ValidatingWebhookConfigurationManager) Webhooks() []v1beta1.Webhook {
+	return v.configuration.Load().(*v1beta1.ValidatingWebhookConfiguration).Webhooks
 }
 
 func (v *ValidatingWebhookConfigurationManager) updateConfiguration() {
