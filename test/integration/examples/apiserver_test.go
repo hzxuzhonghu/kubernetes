@@ -22,9 +22,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	genericapiserveroptions "k8s.io/apiserver/pkg/server/options"
 	client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -91,15 +92,15 @@ func TestAggregatedAPIServer(t *testing.T) {
 	kubeClientConfigValue := atomic.Value{}
 	go func() {
 		for {
-			// always get a fresh port in case something claimed the old one
-			kubePort, err := framework.FindFreeLocalPort()
+			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			kubeAPIServerOptions := options.NewServerRunOptions()
 			kubeAPIServerOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-			kubeAPIServerOptions.SecureServing.BindPort = kubePort
+			kubeAPIServerOptions.SecureServing.BindPort = port
+			kubeAPIServerOptions.SecureServing.Listener = listener
 			kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
 			kubeAPIServerOptions.InsecureServing.BindPort = 0
 			kubeAPIServerOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
@@ -154,9 +155,13 @@ func TestAggregatedAPIServer(t *testing.T) {
 			t.Log(err)
 			return false, nil
 		}
-		if _, err := kubeClient.Discovery().ServerVersion(); err != nil {
+
+		healthStatus := 0
+		kubeClient.Discovery().RESTClient().Get().AbsPath("/healthz").Do().StatusCode(&healthStatus)
+		if healthStatus != http.StatusOK {
 			return false, nil
 		}
+
 		return true, nil
 	})
 	if err != nil {
@@ -178,30 +183,32 @@ func TestAggregatedAPIServer(t *testing.T) {
 	// start the wardle server to prove we can aggregate it
 	go func() {
 		for {
-			// always get a fresh port in case something claimed the old one
-			wardlePortInt, err := framework.FindFreeLocalPort()
+			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
-			atomic.StoreInt32(wardlePort, int32(wardlePortInt))
-			wardleCmd := sampleserver.NewCommandStartWardleServer(os.Stdout, os.Stderr, stopCh)
-			wardleCmd.SetArgs([]string{
-				"--bind-address", "127.0.0.1",
-				"--secure-port", strconv.Itoa(wardlePortInt),
-				"--requestheader-username-headers=X-Remote-User",
-				"--requestheader-group-headers=X-Remote-Group",
-				"--requestheader-extra-headers-prefix=X-Remote-Extra-",
-				"--requestheader-client-ca-file=" + proxyCACertFile.Name(),
-				"--requestheader-allowed-names=kube-aggregator",
-				"--authentication-kubeconfig", kubeconfigFile.Name(),
-				"--authorization-kubeconfig", kubeconfigFile.Name(),
-				"--etcd-servers", framework.GetEtcdURL(),
-				"--cert-dir", wardleCertDir,
-				"--kubeconfig", kubeconfigFile.Name(),
-			})
-			if err := wardleCmd.Execute(); err != nil {
-				t.Log(err)
+			atomic.StoreInt32(wardlePort, int32(port))
+			options := sampleserver.NewWardleServerOptions(os.Stdout, os.Stderr)
+			options.Complete()
+
+			options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+			options.RecommendedOptions.SecureServing.BindPort = port
+			options.RecommendedOptions.SecureServing.Listener = listener
+			options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
+			options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = wardleCertDir
+			options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
+			options.RecommendedOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
+			options.RecommendedOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
+			options.RecommendedOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
+			options.RecommendedOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
+			options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
+			options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
+			options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
+
+			if err := options.RunWardleServer(stopCh); err != nil {
+				t.Fatal(err)
 			}
+
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
@@ -220,8 +227,9 @@ func TestAggregatedAPIServer(t *testing.T) {
 			t.Log(err)
 			return false, nil
 		}
-		if _, err := wardleClient.Discovery().ServerVersion(); err != nil {
-			t.Log(err)
+		healthStatus := 0
+		wardleClient.Discovery().RESTClient().Get().AbsPath("/healthz").Do().StatusCode(&healthStatus)
+		if healthStatus != http.StatusOK {
 			return false, nil
 		}
 		return true, nil
@@ -256,28 +264,34 @@ func TestAggregatedAPIServer(t *testing.T) {
 
 	go func() {
 		for {
-			// always get a fresh port in case something claimed the old one
-			aggregatorPortInt, err := framework.FindFreeLocalPort()
+
+			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
-			atomic.StoreInt32(aggregatorPort, int32(aggregatorPortInt))
-			aggregatorCmd := kubeaggregatorserver.NewCommandStartAggregator(os.Stdout, os.Stderr, stopCh)
-			aggregatorCmd.SetArgs([]string{
-				"--bind-address", "127.0.0.1",
-				"--secure-port", strconv.Itoa(aggregatorPortInt),
-				"--requestheader-username-headers", "",
-				"--proxy-client-cert-file", proxyClientCertFile.Name(),
-				"--proxy-client-key-file", proxyClientKeyFile.Name(),
-				"--kubeconfig", kubeconfigFile.Name(),
-				"--authentication-kubeconfig", kubeconfigFile.Name(),
-				"--authorization-kubeconfig", kubeconfigFile.Name(),
-				"--etcd-servers", framework.GetEtcdURL(),
-				"--cert-dir", aggregatorCertDir,
-			})
-			if err := aggregatorCmd.Execute(); err != nil {
-				t.Log(err)
+			atomic.StoreInt32(aggregatorPort, int32(port))
+
+			options := kubeaggregatorserver.NewDefaultOptions(os.Stdout, os.Stderr)
+			if err := options.Complete(); err != nil {
+				t.Fatal(err)
 			}
+
+			options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+			options.RecommendedOptions.SecureServing.BindPort = port
+			options.RecommendedOptions.SecureServing.Listener = listener
+			options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{""}
+			options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
+			options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
+			options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
+			options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
+			options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = aggregatorCertDir
+			options.ProxyClientCertFile = proxyClientCertFile.Name()
+			options.ProxyClientKeyFile = proxyClientKeyFile.Name()
+
+			if err := options.RunAggregator(stopCh); err != nil {
+				t.Fatal(err)
+			}
+
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
@@ -295,7 +309,9 @@ func TestAggregatedAPIServer(t *testing.T) {
 			// this happens if we race the API server for writing the cert
 			return false, nil
 		}
-		if _, err := aggregatorDiscoveryClient.Discovery().ServerVersion(); err != nil {
+		healthStatus := 0
+		aggregatorDiscoveryClient.Discovery().RESTClient().Get().AbsPath("/healthz").Do().StatusCode(&healthStatus)
+		if healthStatus != http.StatusOK {
 			return false, nil
 		}
 		return true, nil
@@ -460,8 +476,3 @@ func testAPIResourceList(t *testing.T, client rest.Interface) {
 	assert.Equal(t, "flunders", apiResourceList.APIResources[1].Name)
 	assert.True(t, apiResourceList.APIResources[1].Namespaced)
 }
-
-const (
-	policyCachePollInterval = 100 * time.Millisecond
-	policyCachePollTimeout  = 5 * time.Second
-)

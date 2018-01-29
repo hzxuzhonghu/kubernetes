@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	genericapiserveroptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
@@ -705,21 +706,21 @@ func startRealMasterOrDie(t *testing.T, certDir string) (*allClient, clientv3.KV
 		}()
 
 		for {
+			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			kubeAPIServerOptions := options.NewServerRunOptions()
+
+			kubeAPIServerOptions.SecureServing.BindPort = port
 			kubeAPIServerOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+			kubeAPIServerOptions.SecureServing.Listener = listener
 			kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
 			kubeAPIServerOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
 			kubeAPIServerOptions.Etcd.DefaultStorageMediaType = runtime.ContentTypeJSON // TODO use protobuf?
 			kubeAPIServerOptions.ServiceClusterIPRange = *defaultServiceClusterIPRange
 			kubeAPIServerOptions.Authorization.Mode = "RBAC"
-
-			// always get a fresh port in case something claimed the old one
-			kubePort, err := framework.FindFreeLocalPort()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			kubeAPIServerOptions.SecureServing.BindPort = kubePort
 
 			tunneler, proxyTransport, err := app.CreateNodeDialer(kubeAPIServerOptions)
 			if err != nil {
