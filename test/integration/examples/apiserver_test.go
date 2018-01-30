@@ -91,52 +91,49 @@ func TestAggregatedAPIServer(t *testing.T) {
 
 	kubeClientConfigValue := atomic.Value{}
 	go func() {
-		for {
-			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
+		listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			kubeAPIServerOptions := options.NewServerRunOptions()
-			kubeAPIServerOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-			kubeAPIServerOptions.SecureServing.BindPort = port
-			kubeAPIServerOptions.SecureServing.Listener = listener
-			kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
-			kubeAPIServerOptions.InsecureServing.BindPort = 0
-			kubeAPIServerOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
-			kubeAPIServerOptions.ServiceClusterIPRange = *defaultServiceClusterIPRange
-			kubeAPIServerOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
-			kubeAPIServerOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
-			kubeAPIServerOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
-			kubeAPIServerOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
-			kubeAPIServerOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
-			kubeAPIServerOptions.Authentication.ClientCert.ClientCA = clientCACertFile.Name()
-			kubeAPIServerOptions.Authorization.Mode = "RBAC"
+		kubeAPIServerOptions := options.NewServerRunOptions()
+		kubeAPIServerOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+		kubeAPIServerOptions.SecureServing.BindPort = port
+		kubeAPIServerOptions.SecureServing.Listener = listener
+		kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
+		kubeAPIServerOptions.InsecureServing.BindPort = 0
+		kubeAPIServerOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
+		kubeAPIServerOptions.ServiceClusterIPRange = *defaultServiceClusterIPRange
+		kubeAPIServerOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
+		kubeAPIServerOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
+		kubeAPIServerOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
+		kubeAPIServerOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
+		kubeAPIServerOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
+		kubeAPIServerOptions.Authentication.ClientCert.ClientCA = clientCACertFile.Name()
+		kubeAPIServerOptions.Authorization.Mode = "RBAC"
 
-			tunneler, proxyTransport, err := app.CreateNodeDialer(kubeAPIServerOptions)
-			if err != nil {
-				t.Fatal(err)
-			}
-			kubeAPIServerConfig, sharedInformers, versionedInformers, _, _, err := app.CreateKubeAPIServerConfig(kubeAPIServerOptions, tunneler, proxyTransport)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Adjust the loopback config for external use (external server name and CA)
-			kubeAPIServerClientConfig := rest.CopyConfig(kubeAPIServerConfig.GenericConfig.LoopbackClientConfig)
-			kubeAPIServerClientConfig.CAFile = path.Join(certDir, "apiserver.crt")
-			kubeAPIServerClientConfig.CAData = nil
-			kubeAPIServerClientConfig.ServerName = ""
-			kubeClientConfigValue.Store(kubeAPIServerClientConfig)
+		tunneler, proxyTransport, err := app.CreateNodeDialer(kubeAPIServerOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kubeAPIServerConfig, sharedInformers, versionedInformers, _, _, err := app.CreateKubeAPIServerConfig(kubeAPIServerOptions, tunneler, proxyTransport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Adjust the loopback config for external use (external server name and CA)
+		kubeAPIServerClientConfig := rest.CopyConfig(kubeAPIServerConfig.GenericConfig.LoopbackClientConfig)
+		kubeAPIServerClientConfig.CAFile = path.Join(certDir, "apiserver.crt")
+		kubeAPIServerClientConfig.CAData = nil
+		kubeAPIServerClientConfig.ServerName = ""
+		kubeClientConfigValue.Store(kubeAPIServerClientConfig)
 
-			kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.EmptyDelegate, sharedInformers, versionedInformers)
-			if err != nil {
-				t.Fatal(err)
-			}
+		kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.EmptyDelegate, sharedInformers, versionedInformers)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			if err := kubeAPIServer.GenericAPIServer.PrepareRun().Run(wait.NeverStop); err != nil {
-				t.Log(err)
-			}
-			time.Sleep(100 * time.Millisecond)
+		if err := kubeAPIServer.GenericAPIServer.PrepareRun().Run(wait.NeverStop); err != nil {
+			t.Fatal(err)
 		}
 	}()
 
@@ -182,34 +179,30 @@ func TestAggregatedAPIServer(t *testing.T) {
 
 	// start the wardle server to prove we can aggregate it
 	go func() {
-		for {
-			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			atomic.StoreInt32(wardlePort, int32(port))
-			options := sampleserver.NewWardleServerOptions(os.Stdout, os.Stderr)
-			options.Complete()
+		listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		atomic.StoreInt32(wardlePort, int32(port))
+		options := sampleserver.NewWardleServerOptions(os.Stdout, os.Stderr)
+		options.Complete()
 
-			options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-			options.RecommendedOptions.SecureServing.BindPort = port
-			options.RecommendedOptions.SecureServing.Listener = listener
-			options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
-			options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = wardleCertDir
-			options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
-			options.RecommendedOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
-			options.RecommendedOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
-			options.RecommendedOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
-			options.RecommendedOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
-			options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
-			options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
-			options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
+		options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+		options.RecommendedOptions.SecureServing.BindPort = port
+		options.RecommendedOptions.SecureServing.Listener = listener
+		options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
+		options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = wardleCertDir
+		options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
+		options.RecommendedOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
+		options.RecommendedOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
+		options.RecommendedOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
+		options.RecommendedOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
+		options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
+		options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
+		options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
 
-			if err := options.RunWardleServer(stopCh); err != nil {
-				t.Fatal(err)
-			}
-
-			time.Sleep(100 * time.Millisecond)
+		if err := options.RunWardleServer(stopCh); err != nil {
+			t.Fatal(err)
 		}
 	}()
 
@@ -263,36 +256,31 @@ func TestAggregatedAPIServer(t *testing.T) {
 	aggregatorPort := new(int32)
 
 	go func() {
-		for {
+		listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		atomic.StoreInt32(aggregatorPort, int32(port))
 
-			listener, port, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			atomic.StoreInt32(aggregatorPort, int32(port))
+		options := kubeaggregatorserver.NewDefaultOptions(os.Stdout, os.Stderr)
+		if err := options.Complete(); err != nil {
+			t.Fatal(err)
+		}
 
-			options := kubeaggregatorserver.NewDefaultOptions(os.Stdout, os.Stderr)
-			if err := options.Complete(); err != nil {
-				t.Fatal(err)
-			}
+		options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
+		options.RecommendedOptions.SecureServing.BindPort = port
+		options.RecommendedOptions.SecureServing.Listener = listener
+		options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{""}
+		options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
+		options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
+		options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
+		options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
+		options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = aggregatorCertDir
+		options.ProxyClientCertFile = proxyClientCertFile.Name()
+		options.ProxyClientKeyFile = proxyClientKeyFile.Name()
 
-			options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-			options.RecommendedOptions.SecureServing.BindPort = port
-			options.RecommendedOptions.SecureServing.Listener = listener
-			options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{""}
-			options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
-			options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
-			options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
-			options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
-			options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = aggregatorCertDir
-			options.ProxyClientCertFile = proxyClientCertFile.Name()
-			options.ProxyClientKeyFile = proxyClientKeyFile.Name()
-
-			if err := options.RunAggregator(stopCh); err != nil {
-				t.Fatal(err)
-			}
-
-			time.Sleep(100 * time.Millisecond)
+		if err := options.RunAggregator(stopCh); err != nil {
+			t.Fatal(err)
 		}
 	}()
 
