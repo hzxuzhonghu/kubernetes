@@ -55,21 +55,23 @@ func NewCommandStartAggregator(out, err io.Writer, stopCh <-chan struct{}) *cobr
 	cmd := &cobra.Command{
 		Short: "Launch a API aggregator and proxy server",
 		Long:  "Launch a API aggregator and proxy server",
-		RunE: func(c *cobra.Command, args []string) error {
-			if err := o.Complete(); err != nil {
-				return err
-			}
-			if err := o.Validate(args); err != nil {
-				return err
-			}
-			if err := o.RunAggregator(stopCh); err != nil {
-				return err
-			}
-			return nil
-		},
+	}
+	// For integration test
+	cmd.RunE = func(c *cobra.Command, args []string) error {
+		o.AddFlags(cmd.Flags())
+
+		if err := o.Complete(); err != nil {
+			return err
+		}
+		if err := o.Validate(args); err != nil {
+			return err
+		}
+		if err := o.RunAggregator(stopCh); err != nil {
+			return err
+		}
+		return nil
 	}
 
-	o.AddFlags(cmd.Flags())
 	return cmd
 }
 

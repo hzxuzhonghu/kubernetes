@@ -63,22 +63,23 @@ func NewCommandStartWardleServer(out, errOut io.Writer, stopCh <-chan struct{}) 
 	cmd := &cobra.Command{
 		Short: "Launch a wardle API server",
 		Long:  "Launch a wardle API server",
-		RunE: func(c *cobra.Command, args []string) error {
-			if err := o.Complete(); err != nil {
-				return err
-			}
-			if err := o.Validate(args); err != nil {
-				return err
-			}
-			if err := o.RunWardleServer(stopCh); err != nil {
-				return err
-			}
-			return nil
-		},
 	}
+	// For integration test
+	cmd.RunE = func(c *cobra.Command, args []string) error {
+		flags := cmd.Flags()
+		o.RecommendedOptions.AddFlags(flags)
 
-	flags := cmd.Flags()
-	o.RecommendedOptions.AddFlags(flags)
+		if err := o.Complete(); err != nil {
+			return err
+		}
+		if err := o.Validate(args); err != nil {
+			return err
+		}
+		if err := o.RunWardleServer(stopCh); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	return cmd
 }

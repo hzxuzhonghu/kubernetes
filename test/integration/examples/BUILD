@@ -18,6 +18,7 @@ go_test(
         "//cmd/kube-apiserver/app:go_default_library",
         "//cmd/kube-apiserver/app/options:go_default_library",
         "//test/integration/framework:go_default_library",
+        "//vendor/github.com/spf13/cobra:go_default_library",
         "//vendor/github.com/stretchr/testify/assert:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/util/wait:go_default_library",

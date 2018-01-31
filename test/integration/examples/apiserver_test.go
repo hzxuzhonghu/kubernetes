@@ -25,10 +25,12 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -184,24 +186,40 @@ func TestAggregatedAPIServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		atomic.StoreInt32(wardlePort, int32(port))
-		options := sampleserver.NewWardleServerOptions(os.Stdout, os.Stderr)
-		options.Complete()
 
-		options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-		options.RecommendedOptions.SecureServing.BindPort = port
-		options.RecommendedOptions.SecureServing.Listener = listener
-		options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
-		options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = wardleCertDir
-		options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
-		options.RecommendedOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
-		options.RecommendedOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
-		options.RecommendedOptions.Authentication.RequestHeader.ClientCAFile = proxyCACertFile.Name()
-		options.RecommendedOptions.Authentication.RequestHeader.AllowedNames = []string{"kube-aggregator"}
-		options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
-		options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
-		options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
-
-		if err := options.RunWardleServer(stopCh); err != nil {
+		wardleCmd := sampleserver.NewCommandStartWardleServer(os.Stdout, os.Stderr, stopCh)
+		o := sampleserver.NewWardleServerOptions(os.Stdout, os.Stderr)
+		o.RecommendedOptions.SecureServing.Listener = listener
+		// parse flags
+		flags := wardleCmd.Flags()
+		o.RecommendedOptions.AddFlags(flags)
+		wardleCmd.RunE = func(c *cobra.Command, args []string) error {
+			if err := o.Complete(); err != nil {
+				return err
+			}
+			if err := o.Validate(args); err != nil {
+				return err
+			}
+			if err := o.RunWardleServer(stopCh); err != nil {
+				return err
+			}
+			return nil
+		}
+		wardleCmd.SetArgs([]string{
+			"--bind-address", "127.0.0.1",
+			"--secure-port", strconv.Itoa(port),
+			"--requestheader-username-headers=X-Remote-User",
+			"--requestheader-group-headers=X-Remote-Group",
+			"--requestheader-extra-headers-prefix=X-Remote-Extra-",
+			"--requestheader-client-ca-file=" + proxyCACertFile.Name(),
+			"--requestheader-allowed-names=kube-aggregator",
+			"--authentication-kubeconfig", kubeconfigFile.Name(),
+			"--authorization-kubeconfig", kubeconfigFile.Name(),
+			"--etcd-servers", framework.GetEtcdURL(),
+			"--cert-dir", wardleCertDir,
+			"--kubeconfig", kubeconfigFile.Name(),
+		})
+		if err := wardleCmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
 	}()
@@ -261,25 +279,36 @@ func TestAggregatedAPIServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		atomic.StoreInt32(aggregatorPort, int32(port))
+		aggregatorCmd := kubeaggregatorserver.NewCommandStartAggregator(os.Stdout, os.Stderr, stopCh)
+		aggregatorCmd.SetArgs([]string{
+			"--bind-address", "127.0.0.1",
+			"--secure-port", strconv.Itoa(port),
+			"--requestheader-username-headers", "",
+			"--proxy-client-cert-file", proxyClientCertFile.Name(),
+			"--proxy-client-key-file", proxyClientKeyFile.Name(),
+			"--kubeconfig", kubeconfigFile.Name(),
+			"--authentication-kubeconfig", kubeconfigFile.Name(),
+			"--authorization-kubeconfig", kubeconfigFile.Name(),
+			"--etcd-servers", framework.GetEtcdURL(),
+			"--cert-dir", aggregatorCertDir,
+		})
 
-		options := kubeaggregatorserver.NewDefaultOptions(os.Stdout, os.Stderr)
-		if err := options.Complete(); err != nil {
-			t.Fatal(err)
+		o := kubeaggregatorserver.NewDefaultOptions(os.Stdout, os.Stderr)
+		o.AddFlags(aggregatorCmd.Flags())
+		o.RecommendedOptions.SecureServing.Listener = listener
+		aggregatorCmd.RunE = func(c *cobra.Command, args []string) error {
+			if err := o.Complete(); err != nil {
+				return err
+			}
+			if err := o.Validate(args); err != nil {
+				return err
+			}
+			if err := o.RunAggregator(stopCh); err != nil {
+				return err
+			}
+			return nil
 		}
-
-		options.RecommendedOptions.SecureServing.BindAddress = net.ParseIP("127.0.0.1")
-		options.RecommendedOptions.SecureServing.BindPort = port
-		options.RecommendedOptions.SecureServing.Listener = listener
-		options.RecommendedOptions.Authentication.RequestHeader.UsernameHeaders = []string{""}
-		options.RecommendedOptions.Authentication.RemoteKubeConfigFile = kubeconfigFile.Name()
-		options.RecommendedOptions.Authorization.RemoteKubeConfigFile = kubeconfigFile.Name()
-		options.RecommendedOptions.CoreAPI.CoreAPIKubeconfigPath = kubeconfigFile.Name()
-		options.RecommendedOptions.Etcd.StorageConfig.ServerList = []string{framework.GetEtcdURL()}
-		options.RecommendedOptions.SecureServing.ServerCert.CertDirectory = aggregatorCertDir
-		options.ProxyClientCertFile = proxyClientCertFile.Name()
-		options.ProxyClientKeyFile = proxyClientKeyFile.Name()
-
-		if err := options.RunAggregator(stopCh); err != nil {
+		if err := aggregatorCmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
 	}()
@@ -464,3 +493,4 @@ func testAPIResourceList(t *testing.T, client rest.Interface) {
 	assert.Equal(t, "flunders", apiResourceList.APIResources[1].Name)
 	assert.True(t, apiResourceList.APIResources[1].Namespaced)
 }
+
