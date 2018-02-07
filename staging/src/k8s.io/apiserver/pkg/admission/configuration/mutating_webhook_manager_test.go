@@ -19,12 +19,15 @@ package configuration
 import (
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"k8s.io/api/admissionregistration/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apiserver/pkg/admission/plugin/webhook/generic"
+	admissionregistrationinformers "k8s.io/client-go/informers/admissionregistration/v1beta1"
 	admissionregistrationlisters "k8s.io/client-go/listers/admissionregistration/v1beta1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -85,6 +88,26 @@ func (f *fakeMutatingWebhookConfigLister) Get(name string) (*v1beta1.MutatingWeb
 	panic("unsupported")
 }
 
+func newFakeMutatingWebhookConfigurationManager(f admissionregistrationinformers.MutatingWebhookConfigurationInformer) generic.Source {
+	manager := &mutatingWebhookConfigurationManager{
+		configuration: &atomic.Value{},
+		lister:        f.Lister(),
+		hasSynched:    f.Informer().HasSynced,
+	}
+
+	// Start with an empty list
+	manager.configuration.Store(&v1beta1.MutatingWebhookConfiguration{})
+
+	// On any change, rebuild the config
+	f.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(_ interface{}) { manager.updateConfiguration() },
+		UpdateFunc: func(_, _ interface{}) { manager.updateConfiguration() },
+		DeleteFunc: func(_ interface{}) { manager.updateConfiguration() },
+	})
+
+	return manager
+}
+
 func TestGetMutatingWebhookConfig(t *testing.T) {
 	informer := &fakeMutatingWebhookConfigSharedInformer{
 		informer: &fakeMutatingWebhookConfigInformer{},
@@ -93,9 +116,9 @@ func TestGetMutatingWebhookConfig(t *testing.T) {
 
 	// no configurations
 	informer.lister.list = nil
-	manager := NewMutatingWebhookConfigurationManager(informer)
-	if configurations := manager.Webhooks(); len(configurations.Webhooks) != 0 {
-		t.Errorf("expected empty webhooks, but got %v", configurations.Webhooks)
+	manager := newFakeMutatingWebhookConfigurationManager(informer)
+	if configurations := manager.Webhooks(); len(configurations) != 0 {
+		t.Errorf("expected empty webhooks, but got %v", configurations)
 	}
 
 	// list err
@@ -106,18 +129,18 @@ func TestGetMutatingWebhookConfig(t *testing.T) {
 	informer.lister.list = []*v1beta1.MutatingWebhookConfiguration{webhookConfiguration.DeepCopy()}
 	informer.lister.err = fmt.Errorf("mutating webhook configuration list error")
 	informer.informer.eventHandler.OnAdd(webhookConfiguration.DeepCopy())
-	if configurations := manager.Webhooks(); len(configurations.Webhooks) != 0 {
-		t.Errorf("expected empty webhooks, but got %v", configurations.Webhooks)
+	if configurations := manager.Webhooks(); len(configurations) != 0 {
+		t.Errorf("expected empty webhooks, but got %v", configurations)
 	}
 
 	// configuration populated
 	informer.lister.err = nil
 	informer.informer.eventHandler.OnAdd(webhookConfiguration.DeepCopy())
 	configurations := manager.Webhooks()
-	if len(configurations.Webhooks) == 0 {
+	if len(configurations) == 0 {
 		t.Errorf("expected non empty webhooks")
 	}
-	if !reflect.DeepEqual(configurations.Webhooks, webhookConfiguration.Webhooks) {
-		t.Errorf("Expected\n%#v\ngot\n%#v", webhookConfiguration.Webhooks, configurations.Webhooks)
+	if !reflect.DeepEqual(configurations, webhookConfiguration.Webhooks) {
+		t.Errorf("Expected\n%#v\ngot\n%#v", webhookConfiguration.Webhooks, configurations)
 	}
 }

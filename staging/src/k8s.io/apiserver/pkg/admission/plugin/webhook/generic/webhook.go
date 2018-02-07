@@ -43,9 +43,9 @@ type Webhook struct {
 	sourceFactory SourceFactory
 
 	hookSource       Source
-	clientManager    config.ClientManager
-	convertor        versioned.Convertor
-	namespaceMatcher namespace.Matcher
+	clientManager    *config.ClientManager
+	convertor        *versioned.Convertor
+	namespaceMatcher *namespace.Matcher
 	dispatcher       Dispatcher
 }
 
@@ -77,10 +77,12 @@ func NewWebhook(handler *admission.Handler, configFile io.Reader, sourceFactory 
 	cm.SetServiceResolver(config.NewDefaultServiceResolver())
 
 	return &Webhook{
-		Handler:       handler,
-		sourceFactory: sourceFactory,
-		clientManager: cm,
-		dispatcher:    dispatcherFactory(&cm),
+		Handler:          handler,
+		sourceFactory:    sourceFactory,
+		clientManager:    &cm,
+		convertor:        &versioned.Convertor{},
+		namespaceMatcher: &namespace.Matcher{},
+		dispatcher:       dispatcherFactory(&cm),
 	}, nil
 }
 
@@ -196,4 +198,34 @@ func (a *Webhook) Dispatch(attr admission.Attributes) error {
 		versionedAttr.Object = out
 	}
 	return a.dispatcher.Dispatch(ctx, &versionedAttr, relevantHooks)
+}
+
+// GetConvertor returns the versioned convertor.
+func (a *Webhook) GetConvertor() *versioned.Convertor {
+	return a.convertor
+}
+
+// SetHookSource currently used for test.
+func (a *Webhook) SetHookSource(hook Source) {
+	a.hookSource = hook
+}
+
+// SetClientManager currently used for test.
+func (a *Webhook) SetClientManager(clientManager *config.ClientManager) {
+	a.clientManager = clientManager
+}
+
+// SetClientManager currently used for test.
+func (a *Webhook) GetClientManager() *config.ClientManager {
+	return a.clientManager
+}
+
+// SetDispatcher currently used for test.
+func (a *Webhook) SetDispatcher(dispatcher Dispatcher) {
+	a.dispatcher = dispatcher
+}
+
+// SetNamespaceMatcher currently used for test.
+func (a *Webhook) SetNamespaceMatcher(matcher *namespace.Matcher) {
+	a.namespaceMatcher = matcher
 }

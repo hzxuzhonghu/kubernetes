@@ -73,7 +73,7 @@ func (a *mutatingDispatcher) Dispatch(ctx context.Context, versionedAttr *versio
 	}
 
 	// convert attr.Object to the internal version
-	return a.plugin.convertor.Convert(versionedAttr.Object, versionedAttr.Attributes.GetObject())
+	return a.plugin.GetConvertor().Convert(versionedAttr.Object, versionedAttr.Attributes.GetObject())
 }
 
 // note that callAttrMutatingHook updates attr

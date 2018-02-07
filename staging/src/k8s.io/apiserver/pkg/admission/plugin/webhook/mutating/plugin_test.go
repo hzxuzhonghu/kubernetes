@@ -36,8 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
-	"k8s.io/apiserver/pkg/admission/configuration"
-	"k8s.io/apiserver/pkg/admission/plugin/webhook/config"
+	"k8s.io/apiserver/pkg/admission/plugin/webhook/namespace"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/testcerts"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/rest"
@@ -133,33 +132,31 @@ func TestAdmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("this should never happen? %v", err)
 	}
-	wh, err := NewMutatingWebhook(nil, configuration.NewMutatingWebhookConfigurationManager)
+	wh, err := NewMutatingWebhook(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cm, err := config.NewClientManager()
-	if err != nil {
-		t.Fatalf("cannot create client manager: %v", err)
-	}
-	cm.SetAuthenticationInfoResolver(newFakeAuthenticationInfoResolver(new(int32)))
-	cm.SetServiceResolver(fakeServiceResolver{base: *serverURL})
-	wh.Webhook.clientManager = cm
+	wh.Webhook.GetClientManager().SetAuthenticationInfoResolver(newFakeAuthenticationInfoResolver(new(int32)))
+	wh.Webhook.GetClientManager().SetServiceResolver(fakeServiceResolver{base: *serverURL})
 	wh.SetScheme(scheme)
-	if err = wh.Webhook.clientManager.Validate(); err != nil {
+	if err = wh.Webhook.GetClientManager().Validate(); err != nil {
 		t.Fatal(err)
 	}
-	namespace := "webhook-test"
-	wh.namespaceMatcher.NamespaceLister = fakeNamespaceLister{map[string]*corev1.Namespace{
-		namespace: {
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					"runlevel": "0",
+	ns := "webhook-test"
+	fakeNameSpaceMatcher := namespace.Matcher{
+		NamespaceLister: fakeNamespaceLister{
+			map[string]*corev1.Namespace{
+				ns: {
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"runlevel": "0",
+						},
+					},
 				},
 			},
 		},
-	},
 	}
-
+	wh.Webhook.SetNamespaceMatcher(&fakeNameSpaceMatcher)
 	// Set up a test object for the call
 	kind := corev1.SchemeGroupVersion.WithKind("Pod")
 	name := "my-pod"
@@ -169,7 +166,7 @@ func TestAdmit(t *testing.T) {
 				"pod.name": name,
 			},
 			Name:      name,
-			Namespace: namespace,
+			Namespace: ns,
 		},
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -177,7 +174,7 @@ func TestAdmit(t *testing.T) {
 		},
 	}
 	oldObject := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 	}
 	operation := admission.Update
 	resource := corev1.Resource("pods").WithVersion("v1")
@@ -251,7 +248,7 @@ func TestAdmit(t *testing.T) {
 			},
 			errorContains: "you shall not pass",
 		},
-		"match & disallow & but allowed because namespaceSelector exempt the namespace": {
+		"match & disallow & but allowed because namespaceSelector exempt the ns": {
 			hookSource: fakeHookSource{
 				hooks: []registrationv1beta1.Webhook{{
 					Name:         "disallow",
@@ -268,7 +265,7 @@ func TestAdmit(t *testing.T) {
 			},
 			expectAllow: true,
 		},
-		"match & disallow & but allowed because namespaceSelector exempt the namespace ii": {
+		"match & disallow & but allowed because namespaceSelector exempt the ns ii": {
 			hookSource: fakeHookSource{
 				hooks: []registrationv1beta1.Webhook{{
 					Name:         "disallow",
@@ -373,22 +370,20 @@ func TestAdmit(t *testing.T) {
 		if !strings.Contains(name, "no match") {
 			continue
 		}
-		t.Run(name, func(t *testing.T) {
-			wh.Webhook.hookSource = &tt.hookSource
-			err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, name, resource, subResource, operation, &userInfo))
-			if tt.expectAllow != (err == nil) {
-				t.Errorf("expected allowed=%v, but got err=%v", tt.expectAllow, err)
+		wh.Webhook.SetHookSource(&tt.hookSource)
+		err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, ns, name, resource, subResource, operation, &userInfo))
+		if tt.expectAllow != (err == nil) {
+			t.Errorf("%s: expected allowed=%v, but got err=%v", name, tt.expectAllow, err)
+		}
+		// ErrWebhookRejected is not an error for our purposes
+		if tt.errorContains != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
+				t.Errorf("%s: expected an error saying %q, but got %v", name, tt.errorContains, err)
 			}
-			// ErrWebhookRejected is not an error for our purposes
-			if tt.errorContains != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
-					t.Errorf(" expected an error saying %q, but got %v", tt.errorContains, err)
-				}
-			}
-			if _, isStatusErr := err.(*errors.StatusError); err != nil && !isStatusErr {
-				t.Errorf("%s: expected a StatusError, got %T", name, err)
-			}
-		})
+		}
+		if _, isStatusErr := err.(*errors.StatusError); err != nil && !isStatusErr {
+			t.Errorf("%s: expected a StatusError, got %T", name, err)
+		}
 	}
 }
 
@@ -405,28 +400,27 @@ func TestAdmitCachedClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("this should never happen? %v", err)
 	}
-	wh, err := NewMutatingWebhook(nil, configuration.NewMutatingWebhookConfigurationManager)
+	wh, err := NewMutatingWebhook(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cm, err := config.NewClientManager()
-	if err != nil {
-		t.Fatalf("cannot create client manager: %v", err)
-	}
-	cm.SetServiceResolver(fakeServiceResolver{base: *serverURL})
-	wh.Webhook.clientManager = cm
+	wh.Webhook.GetClientManager().SetServiceResolver(fakeServiceResolver{base: *serverURL})
 	wh.SetScheme(scheme)
-	namespace := "webhook-test"
-	wh.namespaceMatcher.NamespaceLister = fakeNamespaceLister{map[string]*corev1.Namespace{
-		namespace: {
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					"runlevel": "0",
+	ns := "webhook-test"
+	fakeNameSpaceMatcher := namespace.Matcher{
+		NamespaceLister: fakeNamespaceLister{
+			map[string]*corev1.Namespace{
+				ns: {
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"runlevel": "0",
+						},
+					},
 				},
 			},
 		},
-	},
 	}
+	wh.Webhook.SetNamespaceMatcher(&fakeNameSpaceMatcher)
 
 	// Set up a test object for the call
 	kind := corev1.SchemeGroupVersion.WithKind("Pod")
@@ -437,7 +431,7 @@ func TestAdmitCachedClient(t *testing.T) {
 				"pod.name": name,
 			},
 			Name:      name,
-			Namespace: namespace,
+			Namespace: ns,
 		},
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -445,7 +439,7 @@ func TestAdmitCachedClient(t *testing.T) {
 		},
 	}
 	oldObject := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 	}
 	operation := admission.Update
 	resource := corev1.Resource("pods").WithVersion("v1")
@@ -533,30 +527,27 @@ func TestAdmitCachedClient(t *testing.T) {
 	}
 
 	for _, testcase := range cases {
-		t.Run(testcase.name, func(t *testing.T) {
-			wh.Webhook.hookSource = &testcase.hookSource
-			authInfoResolverCount := new(int32)
-			r := newFakeAuthenticationInfoResolver(authInfoResolverCount)
-			wh.Webhook.clientManager.SetAuthenticationInfoResolver(r)
-			if err = wh.Webhook.clientManager.Validate(); err != nil {
-				t.Fatal(err)
-			}
+		wh.Webhook.SetHookSource(&testcase.hookSource)
+		authInfoResolverCount := new(int32)
+		r := newFakeAuthenticationInfoResolver(authInfoResolverCount)
+		wh.Webhook.GetClientManager().SetAuthenticationInfoResolver(r)
+		if err = wh.Webhook.GetClientManager().Validate(); err != nil {
+			t.Fatal(err)
+		}
 
-			err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, namespace, testcase.name, resource, subResource, operation, &userInfo))
-			if testcase.expectAllow != (err == nil) {
-				t.Errorf("expected allowed=%v, but got err=%v", testcase.expectAllow, err)
-			}
+		err = wh.Admit(admission.NewAttributesRecord(&object, &oldObject, kind, ns, testcase.name, resource, subResource, operation, &userInfo))
+		if testcase.expectAllow != (err == nil) {
+			t.Errorf("%s: expected allowed=%v, but got err=%v", testcase.name, testcase.expectAllow, err)
+		}
 
-			if testcase.expectCache && *authInfoResolverCount != 1 {
-				t.Errorf("expected cacheclient, but got none")
-			}
+		if testcase.expectCache && *authInfoResolverCount != 1 {
+			t.Errorf("%s: expected cacheclient, but got none", testcase.name)
+		}
 
-			if !testcase.expectCache && *authInfoResolverCount != 0 {
-				t.Errorf("expected not cacheclient, but got cache")
-			}
-		})
+		if !testcase.expectCache && *authInfoResolverCount != 0 {
+			t.Errorf("%s: expected not cacheclient, but got cache", testcase.name)
+		}
 	}
-
 }
 
 func newTestServer(t *testing.T) *httptest.Server {
