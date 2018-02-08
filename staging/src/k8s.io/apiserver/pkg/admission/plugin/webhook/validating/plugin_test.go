@@ -65,7 +65,7 @@ func TestValidate(t *testing.T) {
 		if !strings.Contains(name, "no match") {
 			continue
 		}
-		wh.Webhook.SetHookSource(&tt.HookSource)
+		wh.Webhook.SetHookSource(tt.HookSource)
 		err = wh.Validate(fake.NewAttribute(ns))
 		if tt.ExpectAllow != (err == nil) {
 			t.Errorf("%s: expected allowed=%v, but got err=%v", name, tt.ExpectAllow, err)
@@ -125,7 +125,7 @@ func TestValidateCachedClient(t *testing.T) {
 
 	cases := fake.NewCachedClientTestcases(serverURL)
 	for _, testcase := range cases {
-		wh.Webhook.SetHookSource(&testcase.HookSource)
+		wh.Webhook.SetHookSource(testcase.HookSource)
 		authInfoResolverCount := new(int32)
 		r := fake.NewAuthenticationInfoResolver(authInfoResolverCount)
 		wh.Webhook.GetClientManager().SetAuthenticationInfoResolver(r)

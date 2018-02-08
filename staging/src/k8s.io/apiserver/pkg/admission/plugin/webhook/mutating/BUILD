@@ -4,7 +4,6 @@ go_library(
     name = "go_default_library",
     srcs = [
         "dispatcher.go",
-        "doc.go",
         "plugin.go",
     ],
     importpath = "k8s.io/apiserver/pkg/admission/plugin/webhook/mutating",

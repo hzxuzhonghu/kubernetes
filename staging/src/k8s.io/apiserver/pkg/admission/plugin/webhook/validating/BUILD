@@ -4,7 +4,6 @@ go_library(
     name = "go_default_library",
     srcs = [
         "dispatcher.go",
-        "doc.go",
         "plugin.go",
     ],
     importpath = "k8s.io/apiserver/pkg/admission/plugin/webhook/validating",
@@ -33,17 +32,14 @@ go_test(
     importpath = "k8s.io/apiserver/pkg/admission/plugin/webhook/validating",
     deps = [
         "//vendor/k8s.io/api/admission/v1beta1:go_default_library",
-        "//vendor/k8s.io/api/admissionregistration/v1beta1:go_default_library",
         "//vendor/k8s.io/api/core/v1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/api/errors:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/labels:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
-        "//vendor/k8s.io/apiserver/pkg/admission:go_default_library",
+        "//vendor/k8s.io/apiserver/pkg/admission/plugin/webhook/fake:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/admission/plugin/webhook/namespace:go_default_library",
-        "//vendor/k8s.io/apiserver/pkg/admission/plugin/webhook/testcerts:go_default_library",
-        "//vendor/k8s.io/apiserver/pkg/authentication/user:go_default_library",
-        "//vendor/k8s.io/client-go/rest:go_default_library",
+        "//vendor/k8s.io/client-go/informers:go_default_library",
+        "//vendor/k8s.io/client-go/kubernetes/fake:go_default_library",
     ],
 )
 
