@@ -17,107 +17,20 @@ limitations under the License.
 package validating
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"k8s.io/api/admission/v1beta1"
-	registrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/admission/plugin/webhook/fake"
 	"k8s.io/apiserver/pkg/admission/plugin/webhook/namespace"
-	"k8s.io/apiserver/pkg/admission/plugin/webhook/testcerts"
-	"k8s.io/apiserver/pkg/authentication/user"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/informers"
+	fakeClientSet "k8s.io/client-go/kubernetes/fake"
 )
-
-type fakeHookSource struct {
-	hooks []registrationv1beta1.Webhook
-	err   error
-}
-
-func (f *fakeHookSource) Webhooks() []registrationv1beta1.Webhook {
-	if f.err != nil {
-		return nil
-	}
-	for i, h := range f.hooks {
-		if h.NamespaceSelector == nil {
-			f.hooks[i].NamespaceSelector = &metav1.LabelSelector{}
-		}
-	}
-	return f.hooks
-}
-
-func (f *fakeHookSource) HasSynched() bool {
-	return true
-}
-
-func (f *fakeHookSource) Run(stopCh <-chan struct{}) {}
-
-type fakeServiceResolver struct {
-	base url.URL
-}
-
-func (f fakeServiceResolver) ResolveEndpoint(namespace, name string) (*url.URL, error) {
-	if namespace == "failResolve" {
-		return nil, fmt.Errorf("couldn't resolve service location")
-	}
-	u := f.base
-	return &u, nil
-}
-
-type fakeNamespaceLister struct {
-	namespaces map[string]*corev1.Namespace
-}
-
-func (f fakeNamespaceLister) List(selector labels.Selector) (ret []*corev1.Namespace, err error) {
-	return nil, nil
-}
-func (f fakeNamespaceLister) Get(name string) (*corev1.Namespace, error) {
-	ns, ok := f.namespaces[name]
-	if ok {
-		return ns, nil
-	}
-	return nil, errors.NewNotFound(corev1.Resource("namespaces"), name)
-}
-
-// ccfgSVC returns a client config using the service reference mechanism.
-func ccfgSVC(urlPath string) registrationv1beta1.WebhookClientConfig {
-	return registrationv1beta1.WebhookClientConfig{
-		Service: &registrationv1beta1.ServiceReference{
-			Name:      "webhook-test",
-			Namespace: "default",
-			Path:      &urlPath,
-		},
-		CABundle: testcerts.CACert,
-	}
-}
-
-type urlConfigGenerator struct {
-	baseURL *url.URL
-}
-
-// ccfgURL returns a client config using the URL mechanism.
-func (c urlConfigGenerator) ccfgURL(urlPath string) registrationv1beta1.WebhookClientConfig {
-	u2 := *c.baseURL
-	u2.Path = urlPath
-	urlString := u2.String()
-	return registrationv1beta1.WebhookClientConfig{
-		URL:      &urlString,
-		CABundle: testcerts.CACert,
-	}
-}
 
 // TestValidate tests that ValidatingWebhook#Validate works as expected
 func TestValidate(t *testing.T) {
@@ -125,9 +38,10 @@ func TestValidate(t *testing.T) {
 	v1beta1.AddToScheme(scheme)
 	corev1.AddToScheme(scheme)
 
-	testServer := newTestServer(t)
+	testServer := fake.NewTestServer(t)
 	testServer.StartTLS()
 	defer testServer.Close()
+
 	serverURL, err := url.ParseRequestURI(testServer.URL)
 	if err != nil {
 		t.Fatalf("this should never happen? %v", err)
@@ -137,272 +51,29 @@ func TestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wh.GetClientManager().SetAuthenticationInfoResolver(newFakeAuthenticationInfoResolver(new(int32)))
-	wh.GetClientManager().SetServiceResolver(fakeServiceResolver{base: *serverURL})
+	wh.GetClientManager().SetAuthenticationInfoResolver(fake.NewAuthenticationInfoResolver(new(int32)))
+	wh.GetClientManager().SetServiceResolver(fake.NewServiceResolver(*serverURL))
 	wh.SetScheme(scheme)
 	if err = wh.GetClientManager().Validate(); err != nil {
 		t.Fatal(err)
 	}
-
 	ns := "webhook-test"
-	fakeNameSpaceMatcher := namespace.Matcher{
-		NamespaceLister: fakeNamespaceLister{
-			map[string]*corev1.Namespace{
-				ns: {
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: map[string]string{
-							"runlevel": "0",
-						},
-					},
-				},
-			},
-		},
-	}
-	wh.Webhook.SetNamespaceMatcher(&fakeNameSpaceMatcher)
-	// Set up a test object for the call
-	kind := corev1.SchemeGroupVersion.WithKind("Pod")
-	name := "my-pod"
-	object := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{
-				"pod.name": name,
-			},
-			Name:      name,
-			Namespace: ns,
-		},
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Pod",
-		},
-	}
-	oldObject := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-	}
-	operation := admission.Update
-	resource := corev1.Resource("pods").WithVersion("v1")
-	subResource := ""
-	userInfo := user.DefaultInfo{
-		Name: "webhook-test",
-		UID:  "webhook-test",
-	}
+	wh.Webhook.SetNamespaceMatcher(fake.NewNamespaceMatcher(ns))
 
-	ccfgURL := urlConfigGenerator{serverURL}.ccfgURL
-
-	type test struct {
-		hookSource    fakeHookSource
-		path          string
-		expectAllow   bool
-		errorContains string
-	}
-
-	matchEverythingRules := []registrationv1beta1.RuleWithOperations{{
-		Operations: []registrationv1beta1.OperationType{registrationv1beta1.OperationAll},
-		Rule: registrationv1beta1.Rule{
-			APIGroups:   []string{"*"},
-			APIVersions: []string{"*"},
-			Resources:   []string{"*/*"},
-		},
-	}}
-
-	policyFail := registrationv1beta1.Fail
-	policyIgnore := registrationv1beta1.Ignore
-
-	table := map[string]test{
-		"no match": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "nomatch",
-					ClientConfig: ccfgSVC("disallow"),
-					Rules: []registrationv1beta1.RuleWithOperations{{
-						Operations: []registrationv1beta1.OperationType{registrationv1beta1.Create},
-					}},
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & allow": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "allow",
-					ClientConfig: ccfgSVC("allow"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & disallow": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "disallow",
-					ClientConfig: ccfgSVC("disallow"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			errorContains: "without explanation",
-		},
-		"match & disallow ii": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "disallowReason",
-					ClientConfig: ccfgSVC("disallowReason"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			errorContains: "you shall not pass",
-		},
-		"match & disallow & but allowed because namespaceSelector exempt the ns": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "disallow",
-					ClientConfig: ccfgSVC("disallow"),
-					Rules:        newMatchEverythingRules(),
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{{
-							Key:      "runlevel",
-							Values:   []string{"1"},
-							Operator: metav1.LabelSelectorOpIn,
-						}},
-					},
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & disallow & but allowed because namespaceSelector exempt the ns ii": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "disallow",
-					ClientConfig: ccfgSVC("disallow"),
-					Rules:        newMatchEverythingRules(),
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{{
-							Key:      "runlevel",
-							Values:   []string{"0"},
-							Operator: metav1.LabelSelectorOpNotIn,
-						}},
-					},
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & fail (but allow because fail open)": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "internalErr A",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyIgnore,
-				}, {
-					Name:          "internalErr B",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyIgnore,
-				}, {
-					Name:          "internalErr C",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & fail (but disallow because fail closed on nil)": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "internalErr A",
-					ClientConfig: ccfgSVC("internalErr"),
-					Rules:        matchEverythingRules,
-				}, {
-					Name:         "internalErr B",
-					ClientConfig: ccfgSVC("internalErr"),
-					Rules:        matchEverythingRules,
-				}, {
-					Name:         "internalErr C",
-					ClientConfig: ccfgSVC("internalErr"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			expectAllow: false,
-		},
-		"match & fail (but fail because fail closed)": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "internalErr A",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyFail,
-				}, {
-					Name:          "internalErr B",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyFail,
-				}, {
-					Name:          "internalErr C",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         matchEverythingRules,
-					FailurePolicy: &policyFail,
-				}},
-			},
-			expectAllow: false,
-		},
-		"match & allow (url)": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "allow",
-					ClientConfig: ccfgURL("allow"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			expectAllow: true,
-		},
-		"match & disallow (url)": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:         "disallow",
-					ClientConfig: ccfgURL("disallow"),
-					Rules:        matchEverythingRules,
-				}},
-			},
-			errorContains: "without explanation",
-		},
-		"absent response and fail open": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "nilResponse",
-					ClientConfig:  ccfgURL("nilResponse"),
-					FailurePolicy: &policyIgnore,
-					Rules:         matchEverythingRules,
-				}},
-			},
-			expectAllow: true,
-		},
-		"absent response and fail closed": {
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "nilResponse",
-					ClientConfig:  ccfgURL("nilResponse"),
-					FailurePolicy: &policyFail,
-					Rules:         matchEverythingRules,
-				}},
-			},
-			errorContains: "Webhook response was absent",
-		},
-		// No need to test everything with the url case, since only the
-		// connection is different.
-	}
-
+	table := fake.NewTestCases(serverURL)
 	for name, tt := range table {
 		if !strings.Contains(name, "no match") {
 			continue
 		}
-		wh.Webhook.SetHookSource(&tt.hookSource)
-		err = wh.Validate(admission.NewAttributesRecord(&object, &oldObject, kind, ns, name, resource, subResource, operation, &userInfo))
-		if tt.expectAllow != (err == nil) {
-			t.Errorf("%s: expected allowed=%v, but got err=%v", name, tt.expectAllow, err)
+		wh.Webhook.SetHookSource(&tt.HookSource)
+		err = wh.Validate(fake.NewAttribute(ns))
+		if tt.ExpectAllow != (err == nil) {
+			t.Errorf("%s: expected allowed=%v, but got err=%v", name, tt.ExpectAllow, err)
 		}
 		// ErrWebhookRejected is not an error for our purposes
-		if tt.errorContains != "" {
-			if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
-				t.Errorf("%s: expected an error saying %q, but got %v", name, tt.errorContains, err)
+		if tt.ErrorContains != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.ErrorContains) {
+				t.Errorf("%s: expected an error saying %q, but got %v", name, tt.ErrorContains, err)
 			}
 		}
 		if _, isStatusErr := err.(*errors.StatusError); err != nil && !isStatusErr {
@@ -417,7 +88,7 @@ func TestValidateCachedClient(t *testing.T) {
 	v1beta1.AddToScheme(scheme)
 	corev1.AddToScheme(scheme)
 
-	testServer := newTestServer(t)
+	testServer := fake.NewTestServer(t)
 	testServer.StartTLS()
 	defer testServer.Close()
 	serverURL, err := url.ParseRequestURI(testServer.URL)
@@ -428,250 +99,51 @@ func TestValidateCachedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wh.GetClientManager().SetServiceResolver(fakeServiceResolver{base: *serverURL})
+	wh.GetClientManager().SetServiceResolver(fake.NewServiceResolver(*serverURL))
 	wh.SetScheme(scheme)
 
 	ns := "webhook-test"
-	fakeNamespaceMatcher := namespace.Matcher{
-		NamespaceLister: fakeNamespaceLister{
-			map[string]*corev1.Namespace{
-				ns: {
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: map[string]string{
-							"runlevel": "0",
-						},
-					},
-				},
+	client := fakeClientSet.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ns,
+			Labels: map[string]string{
+				"runlevel": "0",
 			},
 		},
+	})
+	informerFactory := informers.NewSharedInformerFactory(client, 0)
+	stop := make(chan struct{})
+	defer close(stop)
+	informerFactory.Start(stop)
+	informerFactory.WaitForCacheSync(stop)
+
+	fakeNamespaceMatcher := namespace.Matcher{
+		NamespaceLister: informerFactory.Core().V1().Namespaces().Lister(),
+		Client:          client,
 	}
 	wh.Webhook.SetNamespaceMatcher(&fakeNamespaceMatcher)
 
-	// Set up a test object for the call
-	kind := corev1.SchemeGroupVersion.WithKind("Pod")
-	name := "my-pod"
-	object := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{
-				"pod.name": name,
-			},
-			Name:      name,
-			Namespace: ns,
-		},
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Pod",
-		},
-	}
-	oldObject := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-	}
-	operation := admission.Update
-	resource := corev1.Resource("pods").WithVersion("v1")
-	subResource := ""
-	userInfo := user.DefaultInfo{
-		Name: "webhook-test",
-		UID:  "webhook-test",
-	}
-	ccfgURL := urlConfigGenerator{serverURL}.ccfgURL
-
-	type test struct {
-		name        string
-		hookSource  fakeHookSource
-		expectAllow bool
-		expectCache bool
-	}
-
-	policyIgnore := registrationv1beta1.Ignore
-	cases := []test{
-		{
-			name: "cache 1",
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "cache1",
-					ClientConfig:  ccfgSVC("allow"),
-					Rules:         newMatchEverythingRules(),
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-			expectCache: true,
-		},
-		{
-			name: "cache 2",
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "cache2",
-					ClientConfig:  ccfgSVC("internalErr"),
-					Rules:         newMatchEverythingRules(),
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-			expectCache: true,
-		},
-		{
-			name: "cache 3",
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "cache3",
-					ClientConfig:  ccfgSVC("allow"),
-					Rules:         newMatchEverythingRules(),
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-			expectCache: false,
-		},
-		{
-			name: "cache 4",
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "cache4",
-					ClientConfig:  ccfgURL("allow"),
-					Rules:         newMatchEverythingRules(),
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-			expectCache: true,
-		},
-		{
-			name: "cache 5",
-			hookSource: fakeHookSource{
-				hooks: []registrationv1beta1.Webhook{{
-					Name:          "cache5",
-					ClientConfig:  ccfgURL("allow"),
-					Rules:         newMatchEverythingRules(),
-					FailurePolicy: &policyIgnore,
-				}},
-			},
-			expectAllow: true,
-			expectCache: false,
-		},
-	}
-
+	cases := fake.NewCachedClientTestcases(serverURL)
 	for _, testcase := range cases {
-		wh.Webhook.SetHookSource(&testcase.hookSource)
+		wh.Webhook.SetHookSource(&testcase.HookSource)
 		authInfoResolverCount := new(int32)
-		r := newFakeAuthenticationInfoResolver(authInfoResolverCount)
+		r := fake.NewAuthenticationInfoResolver(authInfoResolverCount)
 		wh.Webhook.GetClientManager().SetAuthenticationInfoResolver(r)
 		if err = wh.Webhook.GetClientManager().Validate(); err != nil {
 			t.Fatal(err)
 		}
 
-		err = wh.Validate(admission.NewAttributesRecord(&object, &oldObject, kind, ns, testcase.name, resource, subResource, operation, &userInfo))
-		if testcase.expectAllow != (err == nil) {
-			t.Errorf("%s: expected allowed=%v, but got err=%v", testcase.name, testcase.expectAllow, err)
+		err = wh.Validate(fake.NewAttribute(ns))
+		if testcase.ExpectAllow != (err == nil) {
+			t.Errorf("%s: expected allowed=%v, but got err=%v", testcase.Name, testcase.ExpectAllow, err)
 		}
 
-		if testcase.expectCache && *authInfoResolverCount != 1 {
-			t.Errorf("%s: expected cacheclient, but got none", testcase.name)
+		if testcase.ExpectCache && *authInfoResolverCount != 1 {
+			t.Errorf("%s: expected cacheclient, but got none", testcase.Name)
 		}
 
-		if !testcase.expectCache && *authInfoResolverCount != 0 {
-			t.Errorf("%s: expected not cacheclient, but got cache", testcase.name)
+		if !testcase.ExpectCache && *authInfoResolverCount != 0 {
+			t.Errorf("%s: expected not cacheclient, but got cache", testcase.Name)
 		}
 	}
-}
-
-func newTestServer(t *testing.T) *httptest.Server {
-	// Create the test webhook server
-	sCert, err := tls.X509KeyPair(testcerts.ServerCert, testcerts.ServerKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootCAs := x509.NewCertPool()
-	rootCAs.AppendCertsFromPEM(testcerts.CACert)
-	testServer := httptest.NewUnstartedServer(http.HandlerFunc(webhookHandler))
-	testServer.TLS = &tls.Config{
-		Certificates: []tls.Certificate{sCert},
-		ClientCAs:    rootCAs,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}
-	return testServer
-}
-
-func webhookHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("got req: %v\n", r.URL.Path)
-	switch r.URL.Path {
-	case "/internalErr":
-		http.Error(w, "webhook internal server error", http.StatusInternalServerError)
-		return
-	case "/invalidReq":
-		w.WriteHeader(http.StatusSwitchingProtocols)
-		w.Write([]byte("webhook invalid request"))
-		return
-	case "/invalidResp":
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("webhook invalid response"))
-	case "/disallow":
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&v1beta1.AdmissionReview{
-			Response: &v1beta1.AdmissionResponse{
-				Allowed: false,
-			},
-		})
-	case "/disallowReason":
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&v1beta1.AdmissionReview{
-			Response: &v1beta1.AdmissionResponse{
-				Allowed: false,
-				Result: &metav1.Status{
-					Message: "you shall not pass",
-				},
-			},
-		})
-	case "/allow":
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&v1beta1.AdmissionReview{
-			Response: &v1beta1.AdmissionResponse{
-				Allowed: true,
-			},
-		})
-	case "/nilResposne":
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&v1beta1.AdmissionReview{})
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func newFakeAuthenticationInfoResolver(count *int32) *fakeAuthenticationInfoResolver {
-	return &fakeAuthenticationInfoResolver{
-		restConfig: &rest.Config{
-			TLSClientConfig: rest.TLSClientConfig{
-				CAData:   testcerts.CACert,
-				CertData: testcerts.ClientCert,
-				KeyData:  testcerts.ClientKey,
-			},
-		},
-		cachedCount: count,
-	}
-}
-
-type fakeAuthenticationInfoResolver struct {
-	restConfig  *rest.Config
-	cachedCount *int32
-}
-
-func (c *fakeAuthenticationInfoResolver) ClientConfigFor(server string) (*rest.Config, error) {
-	atomic.AddInt32(c.cachedCount, 1)
-	return c.restConfig, nil
-}
-
-func (c *fakeAuthenticationInfoResolver) ClientConfigForService(serviceName, serviceNamespace string) (*rest.Config, error) {
-	atomic.AddInt32(c.cachedCount, 1)
-	return c.restConfig, nil
-}
-
-func newMatchEverythingRules() []registrationv1beta1.RuleWithOperations {
-	return []registrationv1beta1.RuleWithOperations{{
-		Operations: []registrationv1beta1.OperationType{registrationv1beta1.OperationAll},
-		Rule: registrationv1beta1.Rule{
-			APIGroups:   []string{"*"},
-			APIVersions: []string{"*"},
-			Resources:   []string{"*/*"},
-		},
-	}}
 }
