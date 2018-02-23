@@ -193,11 +193,6 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		return nil, fmt.Errorf("%v missing Context", a.group.GroupVersion)
 	}
 
-	optionsExternalVersion := a.group.GroupVersion
-	if a.group.OptionsExternalVersion != nil {
-		optionsExternalVersion = *a.group.OptionsExternalVersion
-	}
-
 	resource, subresource, err := splitSubresource(path)
 	if err != nil {
 		return nil, err
@@ -243,6 +238,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		exporter = nil
 	}
 
+	optionsExternalVersion := a.group.GroupVersion
 	versionedExportOptions, err := a.group.Creater.New(optionsExternalVersion.WithKind("ExportOptions"))
 	if err != nil {
 		return nil, err

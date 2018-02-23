@@ -52,12 +52,6 @@ type APIGroupInfo struct {
 	GroupMeta apimachinery.GroupMeta
 	// Info about the resources in this group. Its a map from version to resource to the storage.
 	VersionedResourcesStorageMap map[string]map[string]rest.Storage
-	// OptionsExternalVersion controls the APIVersion used for common objects in the
-	// schema like api.Status, api.DeleteOptions, and metav1.ListOptions. Other implementors may
-	// define a version "v1beta1" but want to use the Kubernetes "v1" internal objects.
-	// If nil, defaults to groupMeta.GroupVersion.
-	// TODO: Remove this when https://github.com/kubernetes/kubernetes/issues/19018 is fixed.
-	OptionsExternalVersion *schema.GroupVersion
 	// MetaGroupVersion defaults to "meta.k8s.io/v1" and is the scheme group version used to decode
 	// common API implementations like ListOptions. Future changes will allow this to vary by group
 	// version (for when the inevitable meta/v2 group emerges).
@@ -344,10 +338,6 @@ func (s *GenericAPIServer) installAPIResources(apiPrefix string, apiGroupInfo *A
 		}
 
 		apiGroupVersion := s.getAPIGroupVersion(apiGroupInfo, groupVersion, apiPrefix)
-		if apiGroupInfo.OptionsExternalVersion != nil {
-			apiGroupVersion.OptionsExternalVersion = apiGroupInfo.OptionsExternalVersion
-		}
-
 		if err := apiGroupVersion.InstallREST(s.Handler.GoRestfulContainer); err != nil {
 			return fmt.Errorf("Unable to setup API %v: %v", apiGroupInfo, err)
 		}
@@ -461,10 +451,8 @@ func NewDefaultAPIGroupInfo(group string, registry *registered.APIRegistrationMa
 	return APIGroupInfo{
 		GroupMeta:                    *groupMeta,
 		VersionedResourcesStorageMap: map[string]map[string]rest.Storage{},
-		// TODO unhardcode this.  It was hardcoded before, but we need to re-evaluate
-		OptionsExternalVersion: &schema.GroupVersion{Version: "v1"},
-		Scheme:                 scheme,
-		ParameterCodec:         parameterCodec,
-		NegotiatedSerializer:   codecs,
+		Scheme:               scheme,
+		ParameterCodec:       parameterCodec,
+		NegotiatedSerializer: codecs,
 	}
 }

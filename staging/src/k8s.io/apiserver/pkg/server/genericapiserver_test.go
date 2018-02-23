@@ -181,10 +181,9 @@ func TestInstallAPIGroups(t *testing.T) {
 					"noverbs": &testNoVerbsStorage{Version: gv.Version},
 				},
 			},
-			OptionsExternalVersion: &schema.GroupVersion{Version: "v1"},
-			ParameterCodec:         parameterCodec,
-			NegotiatedSerializer:   codecs,
-			Scheme:                 scheme,
+			ParameterCodec:       parameterCodec,
+			NegotiatedSerializer: codecs,
+			Scheme:               scheme,
 		}
 	}
 
