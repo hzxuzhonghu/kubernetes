@@ -225,12 +225,6 @@ type KubeControllerManagerConfiguration struct {
 	// concurrentSATokenSyncs is the number of service account token syncing operations
 	// that will be done concurrently.
 	ConcurrentSATokenSyncs int32
-	// lookupCacheSizeForRC is the size of lookup cache for replication controllers.
-	// Larger number = more responsive replica management, but more MEM load.
-	// nodeSyncPeriod is the period for syncing nodes from cloudprovider. Longer
-	// periods will result in fewer calls to cloud provider, but may delay addition
-	// of new nodes to cluster.
-	NodeSyncPeriod metav1.Duration
 	// routeReconciliationPeriod is the period for reconciling routes created for Nodes by cloud provider..
 	RouteReconciliationPeriod metav1.Duration
 	// resourceQuotaSyncPeriod is the period for syncing quota usage status
@@ -263,20 +257,11 @@ type KubeControllerManagerConfiguration struct {
 	DeploymentControllerSyncPeriod metav1.Duration
 	// podEvictionTimeout is the grace period for deleting pods on failed nodes.
 	PodEvictionTimeout metav1.Duration
-	// DEPRECATED: deletingPodsQps is the number of nodes per second on which pods are deleted in
-	// case of node failure.
-	DeletingPodsQps float32
-	// DEPRECATED: deletingPodsBurst is the number of nodes on which pods are bursty deleted in
-	// case of node failure. For more details look into RateLimiter.
-	DeletingPodsBurst int32
 	// nodeMontiorGracePeriod is the amount of time which we allow a running node to be
 	// unresponsive before marking it unhealthy. Must be N times more than kubelet's
 	// nodeStatusUpdateFrequency, where N means number of retries allowed for kubelet
 	// to post node status.
 	NodeMonitorGracePeriod metav1.Duration
-	// registerRetryCount is the number of retries for initial node registration.
-	// Retry interval equals node-sync-period.
-	RegisterRetryCount int32
 	// nodeStartupGracePeriod is the amount of time which we allow starting a node to
 	// be unresponsive before marking it unhealthy.
 	NodeStartupGracePeriod metav1.Duration

@@ -83,10 +83,6 @@ func (s *KubeControllerManagerOptions) AddFlags(fs *pflag.FlagSet, allController
 	fs.Int32Var(&s.Generic.ComponentConfig.ConcurrentDeploymentSyncs, "concurrent-deployment-syncs", s.Generic.ComponentConfig.ConcurrentDeploymentSyncs, "The number of deployment objects that are allowed to sync concurrently. Larger number = more responsive deployments, but more CPU (and network) load")
 	fs.Int32Var(&s.Generic.ComponentConfig.ConcurrentNamespaceSyncs, "concurrent-namespace-syncs", s.Generic.ComponentConfig.ConcurrentNamespaceSyncs, "The number of namespace objects that are allowed to sync concurrently. Larger number = more responsive namespace termination, but more CPU (and network) load")
 	fs.Int32Var(&s.Generic.ComponentConfig.ConcurrentSATokenSyncs, "concurrent-serviceaccount-token-syncs", s.Generic.ComponentConfig.ConcurrentSATokenSyncs, "The number of service account token objects that are allowed to sync concurrently. Larger number = more responsive token generation, but more CPU (and network) load")
-	fs.DurationVar(&s.Generic.ComponentConfig.NodeSyncPeriod.Duration, "node-sync-period", 0, ""+
-		"This flag is deprecated and will be removed in future releases. See node-monitor-period for Node health checking or "+
-		"route-reconciliation-period for cloud provider's route configuration settings.")
-	fs.MarkDeprecated("node-sync-period", "This flag is currently no-op and will be deleted.")
 	fs.DurationVar(&s.Generic.ComponentConfig.ResourceQuotaSyncPeriod.Duration, "resource-quota-sync-period", s.Generic.ComponentConfig.ResourceQuotaSyncPeriod.Duration, "The period for syncing quota usage status in the system")
 	fs.DurationVar(&s.Generic.ComponentConfig.NamespaceSyncPeriod.Duration, "namespace-sync-period", s.Generic.ComponentConfig.NamespaceSyncPeriod.Duration, "The period for syncing namespace life-cycle updates")
 	fs.DurationVar(&s.Generic.ComponentConfig.PVClaimBinderSyncPeriod.Duration, "pvclaimbinder-sync-period", s.Generic.ComponentConfig.PVClaimBinderSyncPeriod.Duration, "The period for syncing persistent volumes and persistent volume claims")
@@ -106,13 +102,6 @@ func (s *KubeControllerManagerOptions) AddFlags(fs *pflag.FlagSet, allController
 	fs.Float64Var(&s.Generic.ComponentConfig.HorizontalPodAutoscalerTolerance, "horizontal-pod-autoscaler-tolerance", s.Generic.ComponentConfig.HorizontalPodAutoscalerTolerance, "The minimum change (from 1.0) in the desired-to-actual metrics ratio for the horizontal pod autoscaler to consider scaling.")
 	fs.DurationVar(&s.Generic.ComponentConfig.DeploymentControllerSyncPeriod.Duration, "deployment-controller-sync-period", s.Generic.ComponentConfig.DeploymentControllerSyncPeriod.Duration, "Period for syncing the deployments.")
 	fs.DurationVar(&s.Generic.ComponentConfig.PodEvictionTimeout.Duration, "pod-eviction-timeout", s.Generic.ComponentConfig.PodEvictionTimeout.Duration, "The grace period for deleting pods on failed nodes.")
-	fs.Float32Var(&s.Generic.ComponentConfig.DeletingPodsQps, "deleting-pods-qps", 0.1, "Number of nodes per second on which pods are deleted in case of node failure.")
-	fs.MarkDeprecated("deleting-pods-qps", "This flag is currently no-op and will be deleted.")
-	fs.Int32Var(&s.Generic.ComponentConfig.DeletingPodsBurst, "deleting-pods-burst", 0, "Number of nodes on which pods are bursty deleted in case of node failure. For more details look into RateLimiter.")
-	fs.MarkDeprecated("deleting-pods-burst", "This flag is currently no-op and will be deleted.")
-	fs.Int32Var(&s.Generic.ComponentConfig.RegisterRetryCount, "register-retry-count", s.Generic.ComponentConfig.RegisterRetryCount, ""+
-		"The number of retries for initial node registration.  Retry interval equals node-sync-period.")
-	fs.MarkDeprecated("register-retry-count", "This flag is currently no-op and will be deleted.")
 	fs.DurationVar(&s.Generic.ComponentConfig.NodeMonitorGracePeriod.Duration, "node-monitor-grace-period", s.Generic.ComponentConfig.NodeMonitorGracePeriod.Duration,
 		"Amount of time which we allow running Node to be unresponsive before marking it unhealthy. "+
 			"Must be N times more than kubelet's nodeStatusUpdateFrequency, "+
@@ -123,9 +112,6 @@ func (s *KubeControllerManagerOptions) AddFlags(fs *pflag.FlagSet, allController
 	fs.StringVar(&s.Generic.ComponentConfig.ClusterSigningCertFile, "cluster-signing-cert-file", s.Generic.ComponentConfig.ClusterSigningCertFile, "Filename containing a PEM-encoded X509 CA certificate used to issue cluster-scoped certificates")
 	fs.StringVar(&s.Generic.ComponentConfig.ClusterSigningKeyFile, "cluster-signing-key-file", s.Generic.ComponentConfig.ClusterSigningKeyFile, "Filename containing a PEM-encoded RSA or ECDSA private key used to sign cluster-scoped certificates")
 	fs.DurationVar(&s.Generic.ComponentConfig.ClusterSigningDuration.Duration, "experimental-cluster-signing-duration", s.Generic.ComponentConfig.ClusterSigningDuration.Duration, "The length of duration signed certificates will be given.")
-	var dummy string
-	fs.MarkDeprecated("insecure-experimental-approve-all-kubelet-csrs-for-group", "This flag does nothing.")
-	fs.StringVar(&dummy, "insecure-experimental-approve-all-kubelet-csrs-for-group", "", "This flag does nothing.")
 	fs.StringVar(&s.Generic.ComponentConfig.ServiceCIDR, "service-cluster-ip-range", s.Generic.ComponentConfig.ServiceCIDR, "CIDR Range for Services in cluster. Requires --allocate-node-cidrs to be true")
 	fs.Int32Var(&s.Generic.ComponentConfig.NodeCIDRMaskSize, "node-cidr-mask-size", s.Generic.ComponentConfig.NodeCIDRMaskSize, "Mask size for node cidr in cluster.")
 	fs.StringVar(&s.Generic.ComponentConfig.RootCAFile, "root-ca-file", s.Generic.ComponentConfig.RootCAFile, "If set, this root certificate authority will be included in service account's token secret. This must be a valid PEM-encoded CA bundle.")
