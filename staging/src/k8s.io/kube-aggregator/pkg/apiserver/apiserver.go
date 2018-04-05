@@ -36,7 +36,6 @@ import (
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/install"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1"
-	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
 	"k8s.io/kube-aggregator/pkg/client/clientset_generated/internalclientset"
 	informers "k8s.io/kube-aggregator/pkg/client/informers/internalversion"
 	listers "k8s.io/kube-aggregator/pkg/client/listers/apiregistration/internalversion"
@@ -56,17 +55,9 @@ func init() {
 	install.Install(groupFactoryRegistry, registry, Scheme)
 
 	// we need to add the options (like ListOptions) to empty v1
-	metav1.AddToGroupVersion(aggregatorscheme.Scheme, schema.GroupVersion{Group: "", Version: "v1"})
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Group: "", Version: "v1"})
 
 	unversioned := schema.GroupVersion{Group: "", Version: "v1"}
-	aggregatorscheme.Scheme.AddUnversionedTypes(unversioned,
-		&metav1.Status{},
-		&metav1.APIVersions{},
-		&metav1.APIGroupList{},
-		&metav1.APIGroup{},
-		&metav1.APIResourceList{},
-	)
 	Scheme.AddUnversionedTypes(unversioned,
 		&metav1.Status{},
 		&metav1.APIVersions{},
@@ -211,7 +202,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 	}
 
 	apisHandler := &apisHandler{
-		codecs: aggregatorscheme.Codecs,
+		codecs: Codecs,
 		lister: s.lister,
 		mapper: s.contextMapper,
 	}
@@ -314,7 +305,7 @@ func (s *APIAggregator) AddAPIService(apiService *apiregistration.APIService) er
 	// it's time to register the group aggregation endpoint
 	groupPath := "/apis/" + apiService.Spec.Group
 	groupDiscoveryHandler := &apiGroupHandler{
-		codecs:        aggregatorscheme.Codecs,
+		codecs:        Codecs,
 		groupName:     apiService.Spec.Group,
 		lister:        s.lister,
 		delegate:      s.delegateHandler,

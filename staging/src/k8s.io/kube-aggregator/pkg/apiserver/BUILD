@@ -24,7 +24,6 @@ go_test(
         "//vendor/k8s.io/apiserver/pkg/endpoints/request:go_default_library",
         "//vendor/k8s.io/client-go/tools/cache:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/apis/apiregistration:go_default_library",
-        "//vendor/k8s.io/kube-aggregator/pkg/apiserver/scheme:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/client/listers/apiregistration/internalversion:go_default_library",
     ],
 )
@@ -73,7 +72,6 @@ go_library(
         "//vendor/k8s.io/kube-aggregator/pkg/apis/apiregistration/install:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/apis/apiregistration/v1:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1:go_default_library",
-        "//vendor/k8s.io/kube-aggregator/pkg/apiserver/scheme:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/client/clientset_generated/internalclientset:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/client/informers/internalversion:go_default_library",
         "//vendor/k8s.io/kube-aggregator/pkg/client/informers/internalversion/apiregistration/internalversion:go_default_library",
@@ -94,9 +92,6 @@ filegroup(
 
 filegroup(
     name = "all-srcs",
-    srcs = [
-        ":package-srcs",
-        "//staging/src/k8s.io/kube-aggregator/pkg/apiserver/scheme:all-srcs",
-    ],
+    srcs = [":package-srcs"],
     tags = ["automanaged"],
 )

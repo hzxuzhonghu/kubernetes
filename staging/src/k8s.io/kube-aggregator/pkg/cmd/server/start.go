@@ -31,7 +31,6 @@ import (
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1"
 	"k8s.io/kube-aggregator/pkg/apiserver"
-	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
 )
 
 const defaultEtcdPathPrefix = "/registry/kube-aggregator.kubernetes.io/"
@@ -108,9 +107,9 @@ func (o AggregatorOptions) RunAggregator(stopCh <-chan struct{}) error {
 		return fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
-	serverConfig := genericapiserver.NewRecommendedConfig(aggregatorscheme.Codecs)
+	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
-	if err := o.RecommendedOptions.ApplyTo(serverConfig, aggregatorscheme.Scheme); err != nil {
+	if err := o.RecommendedOptions.ApplyTo(serverConfig, apiserver.Scheme); err != nil {
 		return err
 	}
 	serverConfig.LongRunningFunc = filters.BasicLongRunningRequestCheck(
