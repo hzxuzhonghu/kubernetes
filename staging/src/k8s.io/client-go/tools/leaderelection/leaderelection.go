@@ -198,7 +198,6 @@ func (le *LeaderElector) acquire(ctx context.Context) bool {
 		}
 		le.config.Lock.RecordEvent("became leader")
 		glog.Infof("successfully acquired lease %v", desc)
-		cancel()
 	}, le.config.RetryPeriod, JitterFactor, true, ctx.Done())
 	return succeeded
 }
@@ -221,7 +220,6 @@ func (le *LeaderElector) renew(ctx context.Context) {
 		}
 		le.config.Lock.RecordEvent("stopped leading")
 		glog.Infof("failed to renew lease %v: %v", desc, err)
-		cancel()
 	}, 0, ctx.Done())
 }
 
