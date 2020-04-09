@@ -1198,6 +1198,7 @@ func (c *cacheWatcher) stopThreadUnsafe() {
 		c.stopped = true
 		close(c.done)
 		close(c.input)
+		close(c.result)
 	}
 }
 
